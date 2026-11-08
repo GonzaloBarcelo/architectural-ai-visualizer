@@ -13,7 +13,11 @@ from pipelines.common import sha256, write_json
 
 def coords(value):
     if isinstance(value, (fitz.Point, fitz.Rect, fitz.Quad)):
-        return list(value)
+        return [coords(item) for item in value]
+    if isinstance(value, (list, tuple)):
+        return [coords(item) for item in value]
+    if isinstance(value, dict):
+        return {key: coords(item) for key, item in value.items()}
     return value
 
 
@@ -47,7 +51,7 @@ def extract(path: Path, output: Path):
                 {
                     "type": a.type[1],
                     "rect": list(a.rect + (a.rect_delta or (0, 0, 0, 0))),
-                    "vertices": a.vertices,
+                    "vertices": coords(a.vertices),
                     "content": a.info.get("content", ""),
                 }
             )
