@@ -9,9 +9,9 @@ import json
 from collections import Counter
 from pathlib import Path
 
-import cv2
 import numpy as np
 from PIL import Image
+from shapely import contains_xy
 from shapely.geometry import Point, Polygon
 from shapely.ops import unary_union
 
@@ -89,14 +89,13 @@ def _raster_polygon(polygons, bounds, resolution):
     lo_x, lo_y, hi_x, hi_y = bounds
     if hi_x <= lo_x or hi_y <= lo_y:
         raise ValueError("Invalid orthographic bounds")
-    mask = np.zeros((resolution, resolution), dtype=np.uint8)
-    for polygon in polygons:
-        pts = np.asarray(polygon, dtype=float)
-        # Render pixels describe pixel centers; float coordinates converted to pixel grid.
-        pts[:, 0] = (pts[:, 0] - lo_x) / (hi_x - lo_x) * resolution
-        pts[:, 1] = (hi_y - pts[:, 1]) / (hi_y - lo_y) * resolution
-        cv2.fillPoly(mask, [np.rint(pts).astype(np.int32)], 255)
-    return mask
+    # Compare pixel centres, matching Blender's thresholded orthographic projection.
+    # Inclusive rounded fillPoly boundaries can exaggerate narrow walls by a full pixel.
+    x = lo_x + (np.arange(resolution) + 0.5) * (hi_x - lo_x) / resolution
+    y = hi_y - (np.arange(resolution) + 0.5) * (hi_y - lo_y) / resolution
+    xx, yy = np.meshgrid(x, y)
+    source = unary_union([Polygon(p) for p in polygons])
+    return contains_xy(source, xx, yy).astype(np.uint8) * 255
 
 
 def check(geometry: Geometry, output: Path, include_renders=True, tolerance_m=0.002):
@@ -321,7 +320,10 @@ def check(geometry: Geometry, output: Path, include_renders=True, tolerance_m=0.
         except (OSError, ValueError, KeyError) as exc:
             record("orthographic_source_overlay", False, detail=str(exc))
     required = (
-        [output / "renders" / f"{name}.webp" for name in ["exterior", "interior", "axonometric"]]
+        [
+            output / "renders" / f"{name}.webp"
+            for name in (["exterior", "axonometric"] + (["interior"] if geometry.rooms else []))
+        ]
         if include_renders
         else []
     )

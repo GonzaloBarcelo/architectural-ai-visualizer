@@ -103,6 +103,8 @@ def publish_local_assets(output, destination):
 def run(args):
     from pipelines.quality.check import check
 
+    progress = getattr(args, "progress", lambda stage: None)
+    progress("extracting")
     output = args.output.resolve()
     site_root = args.site_root.resolve()
     output.mkdir(parents=True, exist_ok=True)
@@ -126,6 +128,7 @@ def run(args):
             g.project_id = output.name
         else:
             g = normalize(raw, output.name)
+        progress("validating_geometry")
         source_check(g, raw)
         write_json(work / "geometry.json", g.model_dump())
         write_json(
@@ -161,23 +164,28 @@ def run(args):
             "--samples",
             str(args.samples),
         ]
+        progress("modeling")
         execute(
             blender + ["--stage", "build"] + (["--clay"] if args.clay else []),
             work / "blender-build.log",
         )
+        progress("preview_qa")
         qa = check(g, work, include_renders=False)
         if not qa["passed"]:
             raise ValueError(
                 "Critical geometry/preview QA failed; inspect quality-report.json. Final export blocked."
             )
+        progress("rendering")
         execute(blender + ["--stage", "final"], work / "blender-final.log")
         for path in (work / "renders").glob("*.png"):
             Image.open(path).convert("RGB").save(path.with_suffix(".webp"), quality=95, method=6)
+        progress("final_qa")
         qa = check(g, work, include_renders=True)
         if not qa["passed"]:
             raise ValueError(
                 "Final render QA failed; delivery blocked. Inspect quality-report.json."
             )
+        progress("exporting")
         execute(
             [
                 "node",
@@ -232,6 +240,7 @@ def run(args):
             publish_local_assets(output, args.site_assets.resolve())
             execute(["npm", "run", "build"], output / "site-build.log", site_root)
         write_json(output / "run-status.json", {"passed": True, "source_sha256": g.source.sha256})
+        progress("completed")
         return output
     except Exception as exc:
         write_json(

@@ -359,11 +359,20 @@ def render_top(scene, output):
     bg = scene.world.node_tree.nodes["Background"]
     old = bg.inputs[0].default_value[:]
     bg.inputs[0].default_value = (0, 0, 0, 1)
-    scene.view_settings.view_transform = "Standard"
+    # QA measures silhouette coverage, not display brightness. sRGB conversion and
+    # denoising expand thin white edges across the 50% threshold on a black mask.
+    old_transform = scene.view_settings.view_transform
+    old_denoising = scene.cycles.use_denoising
+    old_samples = scene.cycles.samples
+    scene.view_settings.view_transform = "Raw"
+    scene.cycles.use_denoising = False
+    scene.cycles.samples = 64
     scene.render.filepath = str(output / "topdown-mask.png")
     bpy.ops.render.render(write_still=True)
     scene.view_layers[0].material_override = None
-    scene.view_settings.view_transform = "AgX"
+    scene.view_settings.view_transform = old_transform
+    scene.cycles.use_denoising = old_denoising
+    scene.cycles.samples = old_samples
     bg.inputs[0].default_value = old
     for name, value in hidden.items():
         bpy.data.objects[name].hide_render = value

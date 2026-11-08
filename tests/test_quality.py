@@ -5,7 +5,7 @@ import pytest
 
 from pipelines.common import write_json
 from pipelines.geometry.schema import Geometry
-from pipelines.quality.check import _mesh_facts, check
+from pipelines.quality.check import _mesh_facts, _raster_polygon, check
 
 
 def cube_object(ident, kind, floor_id, lower, upper):
@@ -117,3 +117,12 @@ def test_missing_render_evidence_blocks_delivery(geometry, tmp_path):
     result = check(geo, tmp_path, include_renders=True)
     assert not result["passed"]
     assert "orthographic_source_overlay" in result["errors"]
+
+
+def test_narrow_wall_raster_uses_pixel_coverage_without_edge_expansion():
+    # 20 cm wall at 10 cm/pixel: exactly two columns and eighty rows.
+    polygon = [[1, 1], [1.2, 1], [1.2, 9], [1, 9]]
+    mask = _raster_polygon([polygon], [0, 0, 10, 10], 100)
+    expected = np.zeros((100, 100), dtype=np.uint8)
+    expected[10:90, 10:12] = 255
+    np.testing.assert_array_equal(mask, expected)
