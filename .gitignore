@@ -15,3 +15,5 @@ site/test-results/
 *.blend*
 .DS_Store
 .tmp/
+
+*.tsbuildinfo

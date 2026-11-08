@@ -1,0 +1,8 @@
+# Merge this entry into a trusted workspace .codex/config.toml, or use:
+# codex mcp add architectural-blender --env BLENDER_HOST=127.0.0.1 --env BLENDER_PORT=9876 --env BLENDER_MCP_SAFE_MODE=1 --env DISABLE_TELEMETRY=true -- uvx --python 3.12 mcp-for-blender==2.2.7
+# GUI clients may need the absolute path returned by `command -v uvx`.
+[mcp_servers.architectural-blender]
+command = "uvx"
+args = ["--python", "3.12", "mcp-for-blender==2.2.7"]
+env = { BLENDER_HOST = "127.0.0.1", BLENDER_PORT = "9876", BLENDER_MCP_SAFE_MODE = "1", DISABLE_TELEMETRY = "true" }
+startup_timeout_sec = 60
