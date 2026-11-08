@@ -1,4 +1,22 @@
-# User guide
+# Guía del flujo web — 2026-11-09
+
+1. Instala las dependencias con `uv sync --locked` y `npm --prefix site ci`. Compila con `npm --prefix site run build`.
+2. Inicia `uv run python -m pipelines.web.server --port 5174` y abre http://127.0.0.1:5174/#new-project.
+3. Pulsa **Subir plano PDF**. Límite: 50 MiB y 50 páginas. Selecciona la página; esta versión modela una página y una planta por proyecto.
+4. Usa **Marcar cota** sobre dos extremos de una distancia conocida, introduce los metros y confirma. Introduce y confirma la elevación de la planta. Puedes introducir puntos con el teclado en coordenadas del PDF.
+5. Selecciona el tipo de elemento y dibuja su contorno por vértices; pulsa **Cerrar contorno**. Para rectángulos vectoriales puedes activar los candidatos y seleccionar uno. Un candidato no acredita que sea un muro. Los planos escaneados se pueden trazar sobre su imagen.
+6. Revisa cada muro, losa, habitación, puerta, ventana o cubierta. Completa altura, espesor, cota inferior y muro anfitrión cuando proceda. Los muros parten de la elevación de planta. La losa/cubierta tiene su propia cota inferior absoluta. Las puertas/ventanas usan altura del borde inferior sobre planta. Confirma cada elemento. No añadas datos que no conozcas.
+7. Guarda para continuar después. Marca la confirmación final y pulsa **Comprobar datos**. Los mensajes identifican el elemento o medida que falta o es incoherente. Cambiar escala o contornos exige volver a confirmar.
+8. Pulsa **Generar renders y 3D**. Verás extracción, modelado, comprobaciones, render y exportación. La revisión queda bloqueada mientras trabaja. Puedes recargar la página: el proceso continúa en el servidor.
+9. Al terminar, pulsa **Ver renders y 3D**. Puedes descargar el GLB y las imágenes. Una habitación delimitada habilita el render interior; sin habitaciones se generan exterior y axonometría. No se inventa una cubierta.
+
+Los archivos, revisiones y resultados quedan en `outputs/web-projects/<id>/`, excluidos de Git. El selector **Proyecto local** recupera los proyectos guardados. Si el servidor se interrumpe, el borrador se conserva y puedes reintentar. Los resultados de una revisión anterior no se sirven como la nueva entrega. El servidor escucha únicamente en este equipo; no necesita API key. No publiques esta carpeta.
+
+El flujo ofrece revisión manual de planos generales: no promete reconstrucción semántica automática de cualquier PDF. Los acabados, puertas y cristales son simplificados. Para planos de varias plantas, crea proyectos separados o utiliza la geometría revisada por CLI.
+
+---
+
+# Uso avanzado por CLI
 
 ## Setup and demo
 
@@ -6,7 +24,7 @@ Install Python through uv (`uv python install 3.12`), Blender 4.5 LTS from its o
 
 ```sh
 uv run python -m pipelines.run --demo --output outputs/demo-001 --clay --site-assets site/public/project
-npm --prefix site run dev
+uv run python -m pipelines.web.server --port 5174
 ```
 
 The demo is synthetic test data. Output includes original PDF, evidence images/JSON, geometry, review, editable Blender scene, preview/clay/final renders, QA report, GLB, manifest and provenance. The gallery WebP files are under `outputs/demo-001/renders/`. Final renders default to 960 × 720 and 64 Cycles samples. Increase `--resolution 1920 --samples 256` for a larger presentation; use `--device cpu` to avoid GPU dependence.
@@ -43,6 +61,6 @@ On failure, read `run-status.json` and the indicated stage log. A failed rerun c
 
 Use the Exterior, Axonométrica and Planta controls; orbit/zoom/pan with the pointer or the camera buttons. Select a floor, toggle walls, and reset camera/visibility. Roof controls are disabled when no roof is specified. Interior gallery renders are available; an interactive interior preset is shown only when explicit camera metadata is supplied. Clicking an architectural mesh reveals its source identifier. Downloads contain only the model or rendered image, never the source PDF.
 
-The web app is a presentation viewer. PDF ingestion and validation run through the CLI; browser upload, editing, cloud jobs and persistent storage are intentionally outside this iteration.
+The viewer and PDF workflow share the local FastAPI server. Static Vite preview serves only the presentation; use the Python server for upload, review and generation. Cloud jobs and cloud storage are not implemented.
 
 `--site-root path/to/site` selects another identical frontend source checkout for building/export validation. The normal default is the repository's `site/`; this option is useful when staging a clean installation or preparing an isolated review package.

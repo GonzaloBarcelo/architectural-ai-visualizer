@@ -15,8 +15,8 @@ export interface Manifest {
 }
 export type View = 'exterior' | 'axonometric' | 'top' | 'interior';
 export const projectBase = `${import.meta.env.BASE_URL}project/`;
-export const assetUrl = (relative: string) => `${projectBase}${relative}`;
-export function parseManifest(value: unknown): Manifest {
+export const assetUrl = (relative: string) => relative.startsWith('/api/projects/') ? relative : `${projectBase}${relative}`;
+export function parseManifest(value: unknown, manifestPath = `${projectBase}manifest.json`): Manifest {
   if (!value || typeof value !== 'object') throw new Error('El manifiesto del proyecto no es válido.');
   const m = value as Manifest;
   if (typeof m.project_id !== 'string' || typeof m.title !== 'string' || typeof m.model_url !== 'string' ||
@@ -28,5 +28,16 @@ export function parseManifest(value: unknown): Manifest {
   if (paths.some(p => typeof p !== 'string' || p.includes('..') || p.startsWith('/') || /^[a-z]+:/i.test(p))) {
     throw new Error('Las rutas de los recursos deben pertenecer a este proyecto.');
   }
-  return m;
+  const base = new URL(manifestPath, window.location.href);
+  if (base.origin !== window.location.origin) throw new Error('El proyecto debe pertenecer a este servidor local.');
+  const resolve = (path: string) => {
+    const url = new URL(path, base);
+    if (url.origin !== base.origin) throw new Error('Recurso externo no permitido.');
+    if (base.pathname.startsWith('/api/projects/')) {
+      url.search = base.search;
+      return url.pathname + url.search;
+    }
+    return path;
+  };
+  return {...m,model_url:resolve(m.model_url),renders:m.renders.map(r=>({...r,url:resolve(r.url)}))};
 }

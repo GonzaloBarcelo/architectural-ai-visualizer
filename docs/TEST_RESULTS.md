@@ -1,3 +1,36 @@
+# Web workflow verification — 2026-11-09
+
+**PASS**: upload PDF in the actual browser → review scale/floor/elements → validate → generate with real Blender → load newly generated renders and GLB in the same page. No deployment or publication.
+
+| Boundary / check | Actual evidence |
+| --- | --- |
+| Python suite | 55 passed in 3.74 s; six upstream deprecation warnings (PyMuPDF/SWIG and Starlette TestClient/httpx) |
+| Ruff | All checks passed |
+| Node GLB tests | 2 passed |
+| TypeScript / Vite | Production build passed, 594 modules |
+| Browser upload | Synthetic original.pdf uploaded via the file chooser; actual local API and PDF extraction |
+| Review gate | Generation disabled before confirmation; clearing W1 height produces `Falta una altura positiva, en metros` |
+| Saved state | Restored the confirmed draft after server restart/page reload; retry succeeded |
+| Full browser generation | Project c59064b78b7545d6aaa108c3e3d6af57, run f82d29f75b85471999a5786d3531fca9: succeeded |
+| Geometry / image QA | All 110 checks passed; mask IoU 0.9998794, unchanged minimum 0.90; metric tolerance remains 0.002 m |
+| Khronos / Three.js | 0 validator errors, 0 warnings; 13 meshes, 504 vertices, source IDs preserved |
+| Renders | Actual exterior, interior, axonometric; 960 × 720, 64 Cycles samples |
+| Results in browser | New project API URLs requested with 200; `data-model-loaded=true`; four gallery image elements have intrinsic width 960; no errors/warnings in inspected console |
+| Layout | Current 658 px viewport has document width 658, no horizontal overflow; rendered GLB visually inspected |
+| General-PDF path | A second synthetic PDF without the special annotated convention starts with no entities or scale; generation returns 422 before review |
+| Manual draft + real renderer | Explicitly supplied the second test plan's known scale, floor, four walls and slab through the review API; two renders and valid GLB generated, 45 QA checks pass, IoU 0.9998538 |
+| No rooms | The manual plan has no rooms; exterior/axonometric served successfully, no invented interior render (404) |
+
+The browser test exercised the complete UI with the annotated synthetic fixture. The second general-PDF test exercised the real HTTP API and Blender with explicitly entered test measurements; it was not an automatic semantic interpretation or a real client plan. Rendering used Blender 4.5.9 / Metal on this Mac. Screenshot: `outputs/browser/web-flow.png`. Local logs/state: `outputs/web-tests.log`, `outputs/web-server.log`, `outputs/web-projects/`, `outputs/web-generic-smoke/result.json`; generated/private artifacts remain ignored by Git.
+
+The first browser attempt was blocked by orthographic QA (IoU 0.88696). Investigation found display-gamma conversion and denoising expanding thin mask edges. The QA render now uses Raw linear output with denoising disabled; reference rasterization samples pixel centres. The fix retains the original IoU threshold and all independent metric checks. The failed run remains preserved alongside the successful retry.
+
+Additional regression tests cover incomplete/unconfirmed geometry, thickness mismatch, stale revisions, duplicate running jobs, renderer failure/retry, interrupted jobs on startup, persisted review, cross-origin/Host rejection, corrupt files, artifact allowlisting, stale result invalidation and distinct result URLs on regeneration. API unit tests inject an explicit fake renderer; the two end-to-end runs above use real Blender.
+
+Validation used fresh locked dependencies in `/tmp/aav-validation-env` and `/tmp/aav-site-dependencies` to avoid unusually slow existing workspace dependency reads. Identical frontend sources/build are copied back to `site/dist`. The normal fresh-checkout commands are documented in README. Live OpenAI vision, multi-floor web projects and broad real-plan accuracy remain outside these verified results.
+
+---
+
 # Verification evidence — 2026-11-08
 
 ## End-to-end result

@@ -1,3 +1,20 @@
+# Current local-only workflow — 2026-11-09
+
+The PDF upload/review/generation flow runs on the local FastAPI server:
+
+```sh
+uv sync --locked
+npm --prefix site ci
+npm --prefix site run build
+uv run python -m pipelines.web.server --port 5174
+```
+
+Review at http://127.0.0.1:5174/#new-project. Do not use a static HTTP server or Vite preview for generation: they cannot execute Blender or the API.
+
+No deployment or publication was performed. The previously saved Sites version 1 below is a historical static viewer; it does **not** include the new server workflow and was not updated. It is not the current review target. Publishing a working PDF service would require a separate, explicitly authorized architecture for server jobs and storage.
+
+---
+
 # Local review and ChatGPT Sites
 
 ## Actual status — 2026-11-08

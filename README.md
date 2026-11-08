@@ -11,12 +11,19 @@ Requisitos: Python 3.12–3.13, uv, Node.js 22.12+ y Blender 4.5 LTS. En macOS, 
 ```sh
 uv sync --locked
 npm --prefix site ci
-uv run python scripts/diagnose.py --probe-blender --output outputs/environment.json
-uv run python -m pipelines.run --demo --output outputs/demo-001 --clay --site-assets site/public/project
-npm --prefix site run dev
+npm --prefix site run build
+uv run python -m pipelines.web.server --port 5174
 ```
 
-Abre la dirección local que imprime Vite. El comando de demo también ejecuta el build de producción. No publica ni envía datos a servicios externos.
+Abre **http://127.0.0.1:5174/#new-project**. Sube el PDF, marca una cota conocida, revisa los contornos y completa las medidas. Confirma cada elemento y pulsa **Comprobar datos → Generar renders y 3D**. El servidor ejecuta Blender en segundo plano y muestra el resultado validado en el visor y la galería. Los borradores y resultados se conservan en `outputs/web-projects/`. No publica ni envía el PDF a servicios externos.
+
+La revisión web admite una página y una planta por proyecto. En planos generales debes identificar los elementos: la detección de trazos no determina automáticamente muros, alturas o huecos. Para un render interior, delimita al menos una habitación. Las medidas desconocidas bloquean la generación.
+
+Para crear también la demostración sintética del visor:
+
+```sh
+uv run python -m pipelines.run --demo --output outputs/demo-001 --clay --site-assets site/public/project
+```
 
 Para un PDF autorizado:
 
@@ -35,6 +42,7 @@ pipelines/pdf/        extracción vectorial, raster y propuestas de visión
 pipelines/geometry/   esquema Pydantic, referencias y normalización
 pipelines/blender/    extrusión, huecos, materiales, cámaras, Cycles y GLB
 pipelines/quality/    comparación independiente de malla, planta e imágenes
+pipelines/web/        API local, revisión visual, trabajos y resultados persistidos
 pipelines/run.py      orquestación transaccional y procedencia
 site/                 React, TypeScript, Vite, Three.js, R3F y Drei
 agents/               MCP Blender opcional, aislado y comprobado

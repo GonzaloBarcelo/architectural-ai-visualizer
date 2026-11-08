@@ -2,12 +2,13 @@
 
 ```mermaid
 flowchart TD
-    A[Authorized PDF] --> B[PyMuPDF: vectors, text, annotations]
+    U[Web upload PDF] --> A[Local FastAPI / private project storage]
+    A --> B[PyMuPDF: vectors, text, annotations]
     A --> C[OpenCV: raster candidates]
     A -. explicit vision flag .-> V[OpenAI: unverified semantic proposals]
     B --> D{Verified scale, heights and entities?}
     C --> D
-    V --> R[Human review and source-linked geometry]
+    V --> R[Web editor: scale, contours, dimensions and confirmations]
     D -- No --> R
     R --> D
     D -- Yes --> G[Metric Geometry JSON / Pydantic]
@@ -21,7 +22,7 @@ flowchart TD
     E --> L[Khronos validator and Three.js loader]
     F --> W[React / R3F web viewer]
     L --> W
-    W --> H[Local review / saved Sites version]
+    W --> H[Local review and downloads]
 ```
 
 ## Authoritative source
@@ -54,6 +55,18 @@ Blender exports evaluated world-space vertices/triangles, not only object dimens
 
 Blender exports glTF 2.0 with extras and metre-scale Y-up conversion. glTF Transform performs lossless resource deduplication, preserving node names, metadata, hierarchy and transforms; no mesh simplification or quantization. Khronos glTF Validator and Three.js GLTFLoader independently load the model. Procedural materials require no external texture fetches.
 
-`site/public/project/manifest.json` describes model, renders, floors, source digest, bounds and QA status. Paths are relative to Vite BASE_URL. React loads the manifest, lazily loads WebGL and provides camera/floor/visibility controls, gallery and retry states. Static hosting is sufficient; no database or server is required.
+`site/public/project/manifest.json` describes model, renders, floors, source digest, bounds and QA status. Paths are relative to Vite BASE_URL. React loads the manifest, lazily loads WebGL and provides camera/floor/visibility controls, gallery and retry states. Static hosting is sufficient for the presentation viewer only. The PDF workflow requires the local Python server and Blender.
 
 MCP is isolated optional development tooling. See [BLENDER_MCP.md](BLENDER_MCP.md). Production regeneration never requires a GUI or MCP connection.
+
+## Local web orchestration
+
+`pipelines/web/server.py` serves the production React build and same-origin `/api` routes on 127.0.0.1. Upload → extraction → review → queued → running → succeeded/failed. A single background worker controls Blender. JSON project state, evidence, drafts and isolated run directories live in `outputs/web-projects`; no external database or cloud processing is used.
+
+`review.py` validates a typed page/scale/floor/entity draft and builds the source-linked metric schema only after explicit confirmation. General PDFs start with unknown measurements; actual vector rectangles are selectable candidates. The editor supports manual polygons over vector or scanned pages, numeric coordinates and per-element properties. Currently one page and floor per project, up to 300 entities and 200 vertices per entity. Openings must span their host wall thickness; rectangular wall thickness must agree with the calibrated contour.
+
+API routes: POST `/api/projects` (multipart PDF), GET `/api/projects` and `/{id}`, PUT `/{id}/draft`, POST `/{id}/validate`, POST `/{id}/generate`, GET `/{id}/files/{allowed-artifact}`. Mutations carry a revision; stale writes and duplicate jobs return 409. Generation freezes the approved revision. Only a successful current revision exposes its final manifest and assets, with a per-run URL token to invalidate GLB caches. Failed jobs retain evidence and can be retried. Startup marks interrupted jobs for review.
+
+Host/Origin checks reject cross-site and DNS rebinding requests. Body limits apply before parsing; filenames never choose storage paths, random project IDs and explicit artifact allowlists prevent arbitrary file access. The web flow never enables the optional vision API. Source PDFs remain local and generated artifacts are ignored by Git.
+
+The orthographic QA reference samples pixel centres. The rendered mask uses linear Raw output with denoising disabled to avoid display-gamma/denoising edge expansion; metric mesh checks retain their 2 mm tolerance and mask IoU retains the 0.90 threshold.
