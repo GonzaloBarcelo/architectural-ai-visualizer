@@ -8,7 +8,8 @@ export interface Manifest {
   finishes?: Record<string, { name: string; color: [number, number, number]; roughness: number }>;
   units: string;
   model_url: string;
-  renders: { id: string; label: string; url: string }[];
+  renders: Render[];
+  enhancement?: Enhancement;
   floors: { id: string; name: string; elevation: number }[];
   quality: { passed: boolean };
   bounds?: { min: Point3; max: Point3 };
@@ -16,6 +17,14 @@ export interface Manifest {
   source?: { format: 'pdf' | 'dwg' | 'dxf'; sha256: string; converter?: string | null };
   has_roof?: boolean;
   cameras?: { interior?: { position: Point3; target: Point3 } };
+}
+export interface RenderEnhancement { status: 'accepted' | 'rejected' | 'failed' | 'skipped'; fidelity?: number | null; cost_usd?: number | null; seconds?: number | null; attempts?: number; notice?: string | null }
+export interface Render { id: string; label: string; url: string; enhanced_url?: string; enhancement?: RenderEnhancement }
+export interface Enhancement {
+  status: 'completed' | 'partial' | 'rejected' | 'failed' | 'unavailable' | 'disabled';
+  notice: string; label: string; model: string; prompt_version: string; style_sha256?: string | null;
+  location?: { used_in_prompt: string; fallback: boolean; source?: { label?: string } | null; confidence?: number | null; status?: string | null };
+  images: number; accepted: number; rejected: number; failed: number; cost_usd: number; seconds: number;
 }
 export type View = 'exterior' | 'axonometric' | 'top' | 'interior';
 export const projectBase = `${import.meta.env.BASE_URL}project/`;
@@ -28,7 +37,7 @@ export function parseManifest(value: unknown, manifestPath = `${projectBase}mani
     throw new Error('El proyecto no incluye los datos necesarios para su revisión.');
   }
   // Only project-local assets are accepted; this presentation never fetches client files remotely.
-  const paths = [m.model_url, ...m.renders.map(r => r.url)];
+  const paths = [m.model_url, ...m.renders.flatMap(r => r.enhanced_url === undefined ? [r.url] : [r.url, r.enhanced_url])];
   if (paths.some(p => typeof p !== 'string' || p.includes('..') || p.startsWith('/') || /^[a-z]+:/i.test(p))) {
     throw new Error('Las rutas de los recursos deben pertenecer a este proyecto.');
   }
@@ -43,5 +52,5 @@ export function parseManifest(value: unknown, manifestPath = `${projectBase}mani
     }
     return path;
   };
-  return {...m,model_url:resolve(m.model_url),renders:m.renders.map(r=>({...r,url:resolve(r.url)}))};
+  return {...m,model_url:resolve(m.model_url),renders:m.renders.map(r=>({...r,url:resolve(r.url),...(r.enhanced_url ? {enhanced_url:resolve(r.enhanced_url)} : {})}))};
 }

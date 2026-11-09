@@ -34,14 +34,32 @@ class ViewerBoundary extends Component<{ children: ReactNode; onRetry: () => voi
   }
 }
 
+const fidelityText = (v?: number | null) => typeof v === 'number' ? v.toLocaleString('es', { minimumFractionDigits: 2, maximumFractionDigits: 2 }) : '—';
+const renderNotice: Record<string, string> = { rejected: 'Mejora rechazada: deriva geométrica', failed: 'Mejora con IA no disponible para esta vista', skipped: 'Vista no mejorada (desactivado)' };
+
 function Gallery({ manifest }: { manifest: Manifest }) {
   const [selected, setSelected] = useState(0);
+  // Per view: show the original instead of the enhanced image (enhanced is the default).
+  const [original, setOriginal] = useState<Record<string, boolean>>({});
   const current = manifest.renders[selected];
   if (!current) return <p className="empty">No hay renders disponibles en este proyecto.</p>;
+  const info = manifest.enhancement;
+  const enhanced = !!current.enhanced_url && !original[current.id];
+  const shown = enhanced && current.enhanced_url ? current.enhanced_url : current.url;
+  const status = current.enhancement?.status;
   return <section className="gallery-section" id="renders" aria-labelledby="gallery-title">
-    <div className="section-heading"><div><span className="eyebrow">RESULTADO / RENDERS</span><h2 id="gallery-title">{manifest.title}</h2></div><p>Renders de Blender (Cycles).<br />Misma geometría que el modelo 3D interactivo.</p></div>
-    <figure className="render-main"><img key={current.url} src={assetUrl(current.url)} alt={`${manifest.title} — ${current.label}`} loading="lazy" /><figcaption><span>{String(selected + 1).padStart(2, '0')} / {String(manifest.renders.length).padStart(2, '0')}</span><span>{current.label}</span><a href={assetUrl(current.url)} download>Descargar imagen ↗</a></figcaption></figure>
-    <div className="render-thumbnails" aria-label="Seleccionar render">{manifest.renders.map((render, index) => <button key={render.id} className={index === selected ? 'thumbnail selected' : 'thumbnail'} onClick={() => setSelected(index)} aria-pressed={index === selected}><img src={assetUrl(render.url)} alt="" loading="lazy"/><span><small>{String(index + 1).padStart(2, '0')}</small>{render.label}<span aria-hidden="true">↗</span></span></button>)}</div>
+    <div className="section-heading"><div><span className="eyebrow">RESULTADO / RENDERS</span><h2 id="gallery-title">{manifest.title}</h2></div><p>Renders de Blender (Cycles), misma geometría que el modelo 3D.{info && info.accepted ? <><br />Versión mejorada con IA: ilustrativa, no altera el plano ni el modelo.</> : null}</p></div>
+    {info && info.status !== 'completed' ? <p className="enhance-notice" role="status">{info.notice}</p> : null}
+    <figure className="render-main">
+      <div className="render-frame"><img key={shown} src={assetUrl(shown)} alt={`${manifest.title} — ${current.label}${enhanced ? ' (mejorada con IA, ilustrativa)' : ''}`} loading="lazy" />
+        {enhanced ? <span className="enhance-badge">{info?.label ?? 'Imagen mejorada con IA · ilustrativa'}</span> : null}
+        {current.enhanced_url ? <div className="version-toggle" role="group" aria-label="Versión de la imagen"><button type="button" aria-pressed={!enhanced} onClick={() => setOriginal(o => ({ ...o, [current.id]: true }))}>Original</button><button type="button" aria-pressed={enhanced} onClick={() => setOriginal(o => ({ ...o, [current.id]: false }))}>Mejorada con IA</button></div> : null}
+      </div>
+      <figcaption><span>{String(selected + 1).padStart(2, '0')} / {String(manifest.renders.length).padStart(2, '0')}</span><span>{current.label}</span>
+        {current.enhancement && status !== 'skipped' ? <span className={`enhance-meta ${status}`} title="Coincidencia estructural (bordes, líneas y siluetas) entre la imagen mejorada y el render original">{status === 'accepted' ? `Fidelidad geométrica ${fidelityText(current.enhancement.fidelity)}` : `${renderNotice[status ?? ''] ?? ''}${typeof current.enhancement.fidelity === 'number' ? ` · fidelidad ${fidelityText(current.enhancement.fidelity)}` : ''}`}</span> : status === 'skipped' ? <span className="enhance-meta">{renderNotice.skipped}</span> : null}
+        <span className="render-downloads"><a href={assetUrl(current.url)} download>Descargar original ↗</a>{current.enhanced_url ? <a href={assetUrl(current.enhanced_url)} download>Descargar mejorada ↗</a> : null}</span></figcaption>
+    </figure>
+    <div className="render-thumbnails" aria-label="Seleccionar render">{manifest.renders.map((render, index) => <button key={render.id} className={index === selected ? 'thumbnail selected' : 'thumbnail'} onClick={() => setSelected(index)} aria-pressed={index === selected}><img src={assetUrl(render.enhanced_url && !original[render.id] ? render.enhanced_url : render.url)} alt="" loading="lazy"/><span><small>{String(index + 1).padStart(2, '0')}</small>{render.label}{render.enhanced_url ? <em className="thumb-ai">IA</em> : null}<span aria-hidden="true">↗</span></span></button>)}</div>
   </section>;
 }
 

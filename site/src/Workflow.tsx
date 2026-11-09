@@ -18,8 +18,10 @@ type Usage = { input: number; output: number; reasoning: number; cached_input: n
 type Plan = { index: number; name: string; size_m: number[]; wall_area_m2: number };
 type LayerRow = { layer: string; role: string | null; match: string | null; status: string; used: string[]; in_plan: Record<string, number>; elsewhere: number };
 type Cad = { layers?: LayerRow[]; format: string; filename: string; sha256: string; converter?: string | null; units: { name: string; source: string; inferred: boolean }; plan: Plan; plans: Plan[]; items: CadItem[]; pending: Pending[]; notes: string[]; reading_seconds: number; ai: { model: string; called: boolean; cache_hit: boolean; error?: string | null; image: boolean; usage: Usage; seconds: number; items: number } };
-type Project = { source_format?: 'pdf' | 'dwg' | 'dxf'; cad?: Cad; plans?: Plan[]; plan_index?: number; ai_interpretation?: Draft; description?: string; id: string; filename: string; status: 'extracting' | 'review' | 'queued' | 'running' | 'succeeded' | 'failed'; stage: string; error?: string; pages?: Page[]; draft?: Draft; revision: number; issues?: Issue[]; manifest_url?: string; result_revision?: number; finishes_error?: string | null; stage_since?: { stage: string; at: string }; activity?: Activity | null };
-type Activity = { step: number; total: number; label: string; labels?: string[]; started_at: string; attempt?: number };
+type Project = { source_format?: 'pdf' | 'dwg' | 'dxf'; cad?: Cad; plans?: Plan[]; plan_index?: number; ai_interpretation?: Draft; description?: string; id: string; filename: string; status: 'extracting' | 'review' | 'queued' | 'running' | 'succeeded' | 'failed'; stage: string; error?: string; pages?: Page[]; draft?: Draft; revision: number; issues?: Issue[]; manifest_url?: string; result_revision?: number; finishes_error?: string | null; stage_since?: { stage: string; at: string }; activity?: Activity | null; location?: Place | null; enhance?: boolean; enhance_server?: boolean; enhancement?: EnhanceSummary | null; ai_usage?: { plan?: { calls?: { cache_hit?: boolean; usage?: { total_tokens?: number } | null }[] } | null; enhancement?: EnhanceSummary | null } | null };
+type Place = { status: 'verified' | 'inferred' | 'user' | 'missing'; text: string; city?: string | null; region?: string | null; country?: string | null; confidence?: number; method?: string | null; source?: { kind: string; label?: string } | null; derived?: string[] };
+type EnhanceSummary = { status: string; notice?: string; model?: string; images?: number; accepted?: number; rejected?: number; failed?: number; cost_usd?: number; cost_usd_new?: number; seconds?: number };
+type Activity = { step: number; total: number; label: string; labels?: string[]; started_at: string; attempt?: number; kind?: string; done?: number[]; active?: number[]; seconds?: Record<string, number>; item_started?: Record<string, string> };
 type ProjectSummary = Pick<Project, 'id' | 'filename' | 'status' | 'stage'>;
 
 const labels: Record<Kind, string> = { wall: 'Muro', slab: 'Suelo / losa', room: 'Estancia', door: 'Puerta', window: 'Ventana', roof: 'Cubierta', furniture: 'Mueble' };
@@ -28,9 +30,9 @@ const kindColors: Record<Kind, string> = { wall: '#2f3a2a', slab: '#c9b48a', roo
 const finishLabels: Record<string, string> = { walls: 'Paredes', floor: 'Suelo', tile: 'Baños', doors: 'Puertas y armarios', joinery: 'Carpintería exterior', furniture_wood: 'Madera de muebles', upholstery: 'Tapicería', stone: 'Piedra / encimeras', ceramic: 'Sanitarios', metal: 'Metal / grifería' };
 const floorLabels: Record<string, string> = { wood: 'madera', tile: 'baldosa', stone: 'piedra' };
 const busyStates = new Set(['extracting', 'queued', 'running']);
-const stages: Record<string, string> = { reading_dwg: 'Convirtiendo y leyendo el DWG', choose_plan: 'Elige la planta que quieres modelar', resolving: 'Aplicando tus respuestas', extracting: 'Leyendo el PDF', interpreting: 'La IA está interpretando el plano', materials: 'Interpretando la descripción de materiales', validating_geometry: 'Validando geometría', modeling: 'Modelando en Blender', preview_qa: 'Comprobando la escena', rendering: 'Renderizando con Blender', final_qa: 'Comprobando las imágenes', exporting: 'Exportando el modelo 3D', completed: 'Renders listos', queued: 'En cola', review: 'Pendiente de revisión', generation_failed: 'Error de generación', extraction_failed: 'Error al leer el PDF', interrupted: 'Proceso interrumpido' };
+const stages: Record<string, string> = { reading_dwg: 'Convirtiendo y leyendo el DWG', choose_plan: 'Elige la planta que quieres modelar', resolving: 'Aplicando tus respuestas', extracting: 'Leyendo el PDF', interpreting: 'La IA está interpretando el plano', materials: 'Interpretando la descripción de materiales', validating_geometry: 'Validando geometría', modeling: 'Modelando en Blender', preview_qa: 'Comprobando la escena', rendering: 'Renderizando con Blender', final_qa: 'Comprobando las imágenes', exporting: 'Exportando el modelo 3D', enhancing: 'Mejorando los renders con IA', completed: 'Renders listos', queued: 'En cola', review: 'Pendiente de revisión', generation_failed: 'Error de generación', extraction_failed: 'Error al leer el PDF', interrupted: 'Proceso interrumpido' };
 const phases: Record<string, string> = { extracting: 'Leyendo', review: 'En revisión', queued: 'En cola', running: 'Procesando', succeeded: 'Renders listos', failed: 'Necesita atención' };
-const renderStages = ['queued', 'validating_geometry', 'modeling', 'preview_qa', 'rendering', 'final_qa', 'exporting', 'completed'];
+const renderStages = ['queued', 'validating_geometry', 'modeling', 'preview_qa', 'rendering', 'final_qa', 'exporting', 'enhancing', 'completed'];
 const MAX_DESCRIPTION = 1000;
 const aiSteps = ['Muros, puertas y ventanas', 'Mobiliario y orientación', 'Revisión cruzada con el plano original'];
 const dwgSteps = ['Lectura del DWG', 'Consulta de dudas a la IA'];
@@ -41,13 +43,15 @@ const roleLabels: Record<string, string> = { wall: 'Muros', door: 'Puertas', win
 const readingLabels: Record<ReadingStatus, string> = { verified: 'Leído del DWG', inferred: 'Resuelto por la IA', user: 'Indicado por ti', missing: 'Pendiente' };
 const money = (v: number) => '$' + v.toFixed(v < 0.1 ? 3 : 2);
 // Typical durations observed with gpt-5.4 at high reasoning effort; shown so a long wait never looks like a hang.
-const expected: Record<string, string> = { reading_dwg: 'unos segundos', resolving: 'unos segundos', extracting: 'unos segundos', interpreting: '15–20 minutos (3 llamadas a la IA de 4–8 min cada una)', materials: 'menos de un minuto', queued: 'empieza en cuanto termine el trabajo anterior', rendering: '5–8 minutos' };
+const expected: Record<string, string> = { reading_dwg: 'unos segundos', resolving: 'unos segundos', extracting: 'unos segundos', interpreting: '15–20 minutos (3 llamadas a la IA de 4–8 min cada una)', materials: 'menos de un minuto', queued: 'empieza en cuanto termine el trabajo anterior', rendering: '5–8 minutos', enhancing: '2–4 minutos (hasta 3 imágenes a la vez, 1–2 min cada una)' };
+const LOCATION_FALLBACK = 'residencia mediterránea en España';
 const since = (iso: string | undefined, now: number) => iso ? Math.max(0, Math.floor((now - Date.parse(iso)) / 1000)) : null;
 const clock = (seconds: number | null) => seconds === null ? '—' : `${Math.floor(seconds / 60)}:${String(seconds % 60).padStart(2, '0')}`;
 
 function Progress({ project, now, lastContact, offline }: { project: Project; now: number; lastContact: number; offline: boolean }) {
   const stageSeconds = project.stage_since?.stage === project.stage ? since(project.stage_since.at, now) : null;
   const cad = isCad(project);
+  const enhancing = project.stage === 'enhancing' && project.activity?.kind === 'enhance' ? project.activity : null;
   const showSteps = project.stage === 'interpreting' || (cad && project.stage === 'resolving');
   const activity = showSteps ? project.activity : null;
   const steps = activity?.labels ?? (cad ? dwgSteps : aiSteps);
@@ -55,6 +59,11 @@ function Progress({ project, now, lastContact, offline }: { project: Project; no
   const stale = offline || contact === null || contact > 15;
   return <div className="wf-progress-panel" role="status" aria-live="polite">
     <div className="wf-progress-head"><span className="status-dot pulse"/><strong>{stages[project.stage] ?? 'Procesando'}…</strong><span className="wf-clock" aria-label="Tiempo transcurrido">{clock(stageSeconds)}</span></div>
+    {enhancing ? <><p className="wf-muted">{enhancing.label}. Los renders originales ya están entregados; si la mejora falla, se mantienen.</p><ol className="wf-ai-steps">{(enhancing.labels ?? []).map((label, i) => {
+      const done = enhancing.done?.includes(i), active = enhancing.active?.includes(i);
+      const seconds = done ? enhancing.seconds?.[String(i)] ?? null : active ? since(enhancing.item_started?.[String(i)], now) : null;
+      return <li key={label + i} className={done ? 'done' : active ? 'active' : ''}><span className="wf-ai-mark">{done ? '✓' : i + 1}</span><span>{label}</span>{seconds !== null ? <span className="wf-clock">{clock(Math.round(seconds))}</span> : null}</li>;
+    })}</ol></> : null}
     {showSteps ? <ol className="wf-ai-steps">{steps.map((label, i) => {
       const n = i + 1, state = !activity ? (i === 0 ? 'active' : '') : n < activity.step ? 'done' : n === activity.step ? 'active' : '';
       return <li key={label} className={state}><span className="wf-ai-mark">{state === 'done' ? '✓' : n}</span><span>{label}{state === 'active' && activity?.attempt && activity.attempt > 1 ? ` · corrección ${activity.attempt}` : ''}</span>{state === 'active' ? <span className="wf-clock">{activity ? clock(since(activity.started_at, now)) : 'preparando…'}</span> : null}</li>;
@@ -180,6 +189,33 @@ function CadPanel({ cad, busy, onAnswer }: { cad: Cad; busy: boolean; onAnswer: 
   </section>;
 }
 
+const pct = (v?: number) => typeof v === 'number' ? `${Math.round(v * 100)} %` : '';
+
+function EnhanceOptions({ project, text, setText, enhance, setEnhance, disabled }: { project: Project; text: string; setText: (v: string) => void; enhance: boolean; setEnhance: (v: boolean) => void; disabled: boolean }) {
+  const place = project.location;
+  const server = project.enhance_server !== false;
+  const origin = !place || place.status === 'missing'
+    ? `No se ha encontrado en el plano. Si lo dejas vacío se usará «${LOCATION_FALLBACK}».`
+    : place.status === 'user' ? 'Indicada por ti.'
+    : `${place.status === 'verified' ? 'Leída del plano' : 'Inferida'} (${place.source?.label ?? place.method ?? ''}) · confianza ${pct(place.confidence)}${place.derived?.length ? ' · región y país deducidos del código postal' : ''}.`;
+  return <div className="wf-enhance-options">
+    <label className="wf-field"><span>Ubicación del proyecto <em>(luz, clima, vegetación y vistas; nunca cambia el edificio)</em></span>
+      <input value={text} maxLength={300} disabled={disabled} placeholder={LOCATION_FALLBACK} onChange={e => setText(e.target.value)} /><small>{origin}</small></label>
+    <label className="wf-confirm"><input type="checkbox" checked={enhance && server} disabled={disabled || !server} onChange={e => setEnhance(e.target.checked)} /> Mejorar renders con IA <small>{server ? '(imágenes ilustrativas; se conservan los originales)' : '(desactivado en este servidor)'}</small></label>
+  </div>;
+}
+
+function AiUsage({ project }: { project: Project }) {
+  const calls = project.ai_usage?.plan?.calls ?? [];
+  const tokens = calls.filter(c => !c.cache_hit).reduce((sum, c) => sum + (c.usage?.total_tokens ?? 0), 0);
+  const e = project.enhancement ?? project.ai_usage?.enhancement;
+  if (!calls.length && !e) return null;
+  const enhanceText = !e ? null : e.status === 'disabled' ? 'mejora con IA desactivada'
+    : e.status === 'unavailable' ? 'mejora con IA sin clave de API'
+    : `mejora con IA: ${e.accepted ?? 0}/${e.images ?? 0} imágenes · ≈ ${money(e.cost_usd ?? 0)}${e.cost_usd_new === 0 && (e.cost_usd ?? 0) > 0 ? ' (caché, 0 nuevo)' : ''} · ${clock(Math.round(e.seconds ?? 0))}${e.model ? ` · ${e.model}` : ''}`;
+  return <p className="wf-ai-usage">Uso de IA · {calls.length ? `interpretación: ${calls.length} llamada${calls.length === 1 ? '' : 's'}${tokens ? `, ${tokens.toLocaleString('es')} tokens nuevos` : ' (caché)'}` : 'interpretación: —'}{enhanceText ? ` · ${enhanceText}` : ''}{e && e.status !== 'completed' && e.notice ? <span className="wf-warn"> · {e.notice}</span> : null}</p>;
+}
+
 export default function Workflow({ onResult, newRequest = 0 }: { onResult: (url: string | null) => void; newRequest?: number }) {
   const [projects, setProjects] = useState<ProjectSummary[]>([]);
   const [project, setProject] = useState<Project | null>(null);
@@ -193,6 +229,8 @@ export default function Workflow({ onResult, newRequest = 0 }: { onResult: (url:
   const [file, setFile] = useState<File | null>(null);
   const [description, setDescription] = useState('');
   const [materialsText, setMaterialsText] = useState('');
+  const [locationText, setLocationText] = useState('');
+  const [enhanceChoice, setEnhanceChoice] = useState(true);
   const [showAI, setShowAI] = useState(true);
   const [selected, setSelected] = useState('');
   const [kind, setKind] = useState<Kind>('wall');
@@ -208,7 +246,7 @@ export default function Workflow({ onResult, newRequest = 0 }: { onResult: (url:
 
   const remember = useCallback((p: Project, replaceDraft = true) => {
     setProject(p); setIssues(p.issues ?? []);
-    if (replaceDraft) { setDraft(p.draft ?? null); setDirty(false); setMaterialsText(p.description ?? ''); }
+    if (replaceDraft) { setDraft(p.draft ?? null); setDirty(false); setMaterialsText(p.description ?? ''); setLocationText(p.location?.text ?? ''); setEnhanceChoice(p.enhance ?? true); }
     try { localStorage.setItem('gc-active-project', p.id); } catch { /* Storage can be unavailable in private mode. */ }
     if (p.status === 'succeeded' && p.manifest_url && shownResult.current !== p.manifest_url) {
       shownResult.current = p.manifest_url; resultCallback.current(p.manifest_url);
@@ -332,6 +370,32 @@ export default function Workflow({ onResult, newRequest = 0 }: { onResult: (url:
       if (operation === 'validate' && !result.issues?.length) setNotice('Los datos revisados son coherentes. Ya puedes generar.');
     } catch (reason) { showError(reason); } finally { setWorking(false); }
   };
+  // Approval carries the «Mejorar renders con IA» choice; an edited location is saved first.
+  const approveProject = async () => {
+    if (!project || busy) return;
+    setWorking(true); setError(''); setNotice(''); setIssues([]);
+    try {
+      let saved = dirty ? await save() : project;
+      if (!saved) return;
+      if (locationText.trim() !== (saved.location?.text ?? '')) {
+        saved = await request<Project>(`/api/projects/${saved.id}/location`, { method: 'PUT', body: JSON.stringify({ revision: saved.revision, text: locationText.trim() }) });
+        remember(saved, false);
+      }
+      const result = await request<Project>(`/api/projects/${saved.id}/approve`, { method: 'POST', body: JSON.stringify({ revision: saved.revision, enhance: enhanceChoice }) });
+      shownResult.current = ''; onResult(null); remember(result);
+    } catch (reason) { showError(reason); } finally { setWorking(false); }
+  };
+  const enhanceAgain = async () => {
+    if (!project || busy) return;
+    setWorking(true); setError(''); setNotice('');
+    try {
+      let saved = project;
+      if (locationText.trim() !== (saved.location?.text ?? '')) {
+        saved = await request<Project>(`/api/projects/${saved.id}/location`, { method: 'PUT', body: JSON.stringify({ revision: saved.revision, text: locationText.trim() }) });
+      }
+      remember(await request<Project>(`/api/projects/${saved.id}/enhance`, { method: 'POST', body: JSON.stringify({ revision: saved.revision }) }), false);
+    } catch (reason) { showError(reason); } finally { setWorking(false); }
+  };
   const sendAnswers = async (answers: Record<string, Record<string, unknown>>) => {
     if (!project || busy) return;
     setWorking(true); setError(''); setNotice(''); setIssues([]);
@@ -389,7 +453,9 @@ export default function Workflow({ onResult, newRequest = 0 }: { onResult: (url:
     </form> : <>
       <div className="wf-job" role="status"><span className={`status-dot ${busy?'pulse':''}`}/><strong>{project.filename}</strong><span>{stages[project.stage] ?? project.stage}</span>
         {project.status==='succeeded'&&project.manifest_url?<button onClick={()=>document.getElementById('explore')?.scrollIntoView({behavior:'smooth'})}>Ver renders ↓</button>:null}
+        {project.status==='succeeded'&&project.result_revision===project.revision&&project.enhance_server!==false?<button type="button" disabled={working} onClick={()=>void enhanceAgain()} title="Repite solo la mejora con IA sobre los renders ya generados (sin Blender); hace llamadas nuevas a OpenAI">Mejorar de nuevo</button>:null}
         <button type="button" onClick={newProject} disabled={working}>Nuevo plano</button></div>
+      <AiUsage project={project} />
       {rendering ? <div className="wf-progress" aria-label="Progreso de Blender"><div style={{width:`${Math.max(6, renderStages.indexOf(project.stage) / (renderStages.length - 1) * 100)}%`}}/></div> : null}
       {project.error ? <div className="wf-message wf-error" role="alert"><strong>{project.stage === 'generation_failed' ? 'La generación se ha detenido.' : 'Atención'}</strong><p>{project.error}</p>{!busy && project.pages?.length ? <button type="button" onClick={()=>void action('interpret')}>Reintentar interpretación</button> : null}</div> : null}
       {busyStates.has(project.status) ? <Progress project={project} now={now} lastContact={lastContact} offline={offline} /> : null}
@@ -399,7 +465,7 @@ export default function Workflow({ onResult, newRequest = 0 }: { onResult: (url:
     {project && draft && page ? <div className="wf-review">
       {interpreted ? <>
         <div className="wf-review-head"><div><span className="eyebrow">02 / REVISIÓN</span><h3>Comprueba la interpretación junto al plano original</h3><p>{cad ? 'Muros, huecos, bloques y textos se han leído directamente del DWG; la IA solo ha resuelto las dudas. Revisa abajo qué es verificado, qué inferido y qué queda pendiente.' : 'La IA ha seleccionado muros y huecos sobre los vectores del PDF y propone mobiliario. Si algo no encaja, vuelve a interpretar o usa la edición avanzada.'}</p></div>
-          <div className="wf-review-cta"><button type="button" className="wf-primary" disabled={busy || blockingPending > 0} onClick={()=>void action('approve')}>{project.status==='succeeded'&&project.result_revision===project.revision?'Regenerar renders':'Aprobar y generar renders'} →</button><small>{blockingPending ? `Resuelve ${blockingPending} lectura${blockingPending === 1 ? '' : 's'} pendiente${blockingPending === 1 ? '' : 's'} para aprobar.` : cad ? 'Medidas leídas del DWG; alturas supuestas.' : 'Las medidas son inferidas a partir del PDF y su escala.'}</small></div></div>
+          <div className="wf-review-cta"><EnhanceOptions project={project} text={locationText} setText={setLocationText} enhance={enhanceChoice} setEnhance={setEnhanceChoice} disabled={busy} /><button type="button" className="wf-primary" disabled={busy || blockingPending > 0} onClick={()=>void approveProject()}>{project.status==='succeeded'&&project.result_revision===project.revision?'Regenerar renders':'Aprobar y generar renders'} →</button><small>{blockingPending ? `Resuelve ${blockingPending} lectura${blockingPending === 1 ? '' : 's'} pendiente${blockingPending === 1 ? '' : 's'} para aprobar.` : cad ? 'Medidas leídas del DWG; alturas supuestas.' : 'Las medidas son inferidas a partir del PDF y su escala.'}</small></div></div>
         <div className="wf-compare">
           <figure><figcaption>{cad ? `Dibujo ${cad.format.toUpperCase()} (vista local del archivo)` : 'Plano original'}</figcaption><div className="wf-compare-frame"><img src={page.image_url} alt={cad ? 'Dibujo DWG original' : `Plano original, página ${page.page}`} /></div></figure>
           <figure><figcaption>Interpretación de la IA <label className="wf-toggle"><input type="checkbox" checked={showAI} onChange={e=>setShowAI(e.target.checked)}/> Superponer</label></figcaption><div className="wf-compare-frame"><PlanOverlay page={page} entities={showAI ? draft.entities : []} faint={showAI} pending={cad?.pending} /></div></figure>
