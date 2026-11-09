@@ -2,7 +2,7 @@
 
 Sources, in order of trust: a labelled address in the title block ("Dirección:",
 "Emplazamiento:", "Situación:"…), an unlabelled address line with a street prefix, street names
-written on the plan, and finally the filename (e.g. ``MAD_JuanPascualDeMena``). Region,
+written on the plan, and finally the filename (e.g. ``MAD_OlivoVerde``). Region,
 country, latitude and climate are *derived* from the Spanish postal code or a known city and
 are marked as such. The location only steers light, vegetation and the view through windows of
 the AI enhancement; it never changes the building.
@@ -204,7 +204,7 @@ def _title(text, leading=False):
 
 
 def street_name(line):
-    """'C/ Juan Pascual de Mena, 26, 1ºA' → 'Calle Juan Pascual de Mena' (None if no prefix)."""
+    """'C/ Del Olivo, 12, 2ºB' → 'Calle del Olivo' (None if no prefix)."""
     m = STREET.match(line)
     if not m:
         return None

@@ -178,9 +178,9 @@ def test_plan_street_label_plus_filename_city_is_only_inferred():
     loc = L.from_pdf(raw_pdf("CALLE DE LA LUNA\n", "1.20\n"), "MAD_Proyecto.pdf")
     assert loc["street"] == "Calle de la Luna" and loc["city"] == "Madrid"
     assert loc["confidence"] < 0.6 and loc["city_source"]["kind"] == "filename"
-    hint = L.from_filename("MAD_JuanPascualDeMena.pdf")
-    assert hint["street"] == "Calle Juan Pascual de Mena" and hint["city"] == "Madrid"
-    assert L.from_pdf(raw_pdf(), "MAD_JuanPascualDeMena.pdf")["status"] == "inferred"
+    hint = L.from_filename("MAD_OlivoVerde.pdf")
+    assert hint["street"] == "Calle Olivo Verde" and hint["city"] == "Madrid"
+    assert L.from_pdf(raw_pdf(), "MAD_OlivoVerde.pdf")["status"] == "inferred"
 
 
 def test_missing_location_is_never_invented():
