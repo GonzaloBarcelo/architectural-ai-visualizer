@@ -15,14 +15,17 @@ from collections import Counter
 from itertools import pairwise
 
 import ezdxf
+import shapely
 from ezdxf import bbox as ebbox
 from ezdxf import disassemble, recover
 from ezdxf import path as epath
 from shapely import affinity
 from shapely.geometry import LineString, Point, Polygon
+from shapely.geometry.polygon import orient
 from shapely.ops import split, unary_union
 from shapely.validation import make_valid
 
+GRID = 0.0001  # metres: wall geometry is snapped to 0.1 mm (QA tolerance is 2 mm)
 # ezdxf raises these on proxy, unsupported or malformed entities; such entities are skipped.
 CAD_ERRORS = (
     ezdxf.DXFError,
@@ -681,6 +684,48 @@ def split_rings(polygon):
     return done
 
 
+def convex_pieces(polygon, limit=60):
+    """Split a wall outline at its reflex corners into convex pieces. Large orthogonal outlines
+    make Blender's ear-clipping emit zero-area cap triangles; convex pieces never do."""
+    pending, done = [polygon], []
+    while pending:
+        p = orient(pending.pop(), 1.0)
+        coords = list(p.exterior.coords)[:-1]
+        n = len(coords)
+        reflex = None
+        for i in range(n):
+            a, b, c = coords[i - 1], coords[i], coords[(i + 1) % n]
+            if (b[0] - a[0]) * (c[1] - b[1]) - (b[1] - a[1]) * (c[0] - b[0]) < -1e-9:
+                reflex = (a, b, c)
+                break
+        if reflex is None or len(done) + len(pending) >= limit:
+            done.append(p)
+            continue
+        a, b, c = reflex
+        x0, y0, x1, y1 = p.bounds
+        reach = 2 * math.hypot(x1 - x0, y1 - y0)
+        pieces = []
+        for (fx, fy), (tx, ty) in ((a, b), (c, b)):  # extend either edge through the corner
+            length = math.dist((fx, fy), (tx, ty)) or 1
+            dx, dy = (tx - fx) / length, (ty - fy) / length
+            ray = LineString([b, (b[0] + dx * reach, b[1] + dy * reach)])
+            pieces = [q for q in parts(split(p, ray)) if q.area > 1e-6]
+            if len(pieces) > 1:
+                break
+        if len(pieces) <= 1:
+            done.append(p)
+            continue
+        pending.extend(t for q in pieces for t in tidy(q))
+    return [t for q in done for t in tidy(q)]
+
+
+def tidy(polygon):
+    """Valid, spike-free polygonal parts (splits and simplification can leave zero-width spikes)."""
+    snapped = shapely.set_precision(polygon, GRID)  # collapses nanometre slivers and spikes
+    cleaned = make_valid(snapped.simplify(0.0005)).buffer(0)
+    return [Polygon(q.exterior) for q in parts(cleaned) if q.area > 1e-6]
+
+
 # --- Reading -------------------------------------------------------------------------------
 
 
@@ -775,6 +820,7 @@ def read_plan(doc, plan, units, extra_walls=(), excluded_walls=()):
     walls = unary_union([p for p, _, _ in pieces])
     walls = walls.buffer(0.002, join_style=2).buffer(-0.002, join_style=2)
     walls = unary_union([p.simplify(0.003) for p in parts(walls) if p.area > 1e-4])
+    walls = shapely.set_precision(walls, GRID)
 
     gaps = []
     for g in find_gaps(walls):

@@ -254,3 +254,29 @@ def test_corner_wardrobe_backs_onto_its_long_side_not_the_wall_at_its_end(tmp_pa
     assert all(p[0] == pytest.approx(170) for p in back)  # west wall face x = 0.2 m
     assert all(p[0] == pytest.approx(220) for p in front)
     assert not summary["pending"]
+
+
+def test_complex_wall_outlines_split_into_valid_convex_pieces():
+    # An orthogonal outline like a real wall poché, with nanometre noise on its vertices.
+    outline = Polygon(
+        [
+            (0, 0),
+            (6, 0),
+            (6, 4),
+            (5.8, 4),
+            (5.8, 0.2),
+            (3.1, 0.2),
+            (3.1, 1.0 + 1e-9),
+            (3.0, 1.0),
+            (3.0, 0.2),
+            (0.2, 0.2),
+            (0.2, 3.8),
+            (2, 3.8),
+            (2, 4),
+            (0, 4),
+        ]
+    )
+    pieces = [c for t in R.tidy(outline) for c in R.convex_pieces(t)]
+    assert len(pieces) > 1
+    assert all(p.is_valid and p.area > 0 and p.equals(p.convex_hull) for p in pieces)
+    assert sum(p.area for p in pieces) == pytest.approx(outline.area, rel=1e-4)

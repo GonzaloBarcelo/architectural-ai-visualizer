@@ -556,10 +556,8 @@ def assemble(reading, answers, source, notes_ai=()):
     for w in reading["walls"]:
         shape = w["polygon"].difference(hosts) if hosts is not None else w["polygon"]
         for piece in R.parts(shape):
-            for part in R.split_rings(piece):
-                if part.area < 0.002:
-                    continue
-                part = Polygon(part.exterior).simplify(0.002)
+            simple = [t for r in R.split_rings(piece) for t in R.tidy(Polygon(r.exterior))]
+            for part in (c for r in simple for c in R.convex_pieces(r)):
                 if not part.is_valid or part.area < 0.002:
                     continue
                 rect = part.minimum_rotated_rectangle
