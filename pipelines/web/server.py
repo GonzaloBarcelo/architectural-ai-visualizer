@@ -60,6 +60,11 @@ class Description(Revision):
     description: str = Field(default="", max_length=MAX_DESCRIPTION)
 
 
+class Interpret(Revision):
+    # DWG only: attach the labelled low-resolution plan image to the doubts call (None: default).
+    image: bool | None = None
+
+
 class PlanChoice(Revision):
     plan: int = Field(ge=0, le=50)
 
@@ -354,6 +359,7 @@ class Projects:
                 user_answers=state.get("cad_answers"),
                 stored_ai=stored,
                 call_ai=call_ai,
+                image=state.get("ai_image"),
             )
             draft["title"] = Path(state["filename"]).stem[:200] or draft["title"]
             write_json(folder / "cad-ai.json", ai)
@@ -660,7 +666,7 @@ def create_app(
             return projects.save(state)
 
     @app.post("/api/projects/{ident}/interpret", status_code=202)
-    def interpret_project(ident: str, body: Revision):
+    def interpret_project(ident: str, body: Interpret):
         with projects.lock:
             state = projects.get(ident)
             projects.check_revision(state, body.revision)
@@ -670,6 +676,8 @@ def create_app(
             if pdf and (projects.folder(ident) / "source.pdf").stat().st_size > 20 * 1024**2:
                 raise HTTPException(413, "OpenAI admite aquí PDF de hasta 20 MiB.")
             state.update(status="running", stage="interpreting", error=None)
+            if not pdf:
+                state["ai_image"] = body.image
             projects.save(state)
             projects.executor.submit(projects.interpret, ident)
             return state
