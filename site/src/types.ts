@@ -3,6 +3,8 @@ export interface Manifest {
   project_id: string;
   title: string;
   synthetic: boolean;
+  conceptual?: boolean;
+  assumptions?: string[];
   units: string;
   model_url: string;
   renders: { id: string; label: string; url: string }[];

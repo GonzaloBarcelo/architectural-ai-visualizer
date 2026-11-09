@@ -418,7 +418,12 @@ def main():
         "measurements",
         "outdoor_areas",
     ]:
-        if any(v["evidence"]["status"] != "verified" for v in data.get(key, [])):
+        allowed = (
+            {"verified", "inferred"}
+            if data.get("conceptual") and data.get("assumptions")
+            else {"verified"}
+        )
+        if any(v["evidence"]["status"] not in allowed for v in data.get(key, [])):
             raise ValueError("Unverified geometry cannot be modeled as a final scene")
     if data.get("missing_information"):
         raise ValueError("Missing information blocks scene generation")

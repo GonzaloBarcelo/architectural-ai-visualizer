@@ -6,6 +6,7 @@ Run: uv run python -m pipelines.web.server --port 5174
 import argparse
 import json
 import logging
+import os
 import re
 import threading
 from concurrent.futures import ThreadPoolExecutor
@@ -24,6 +25,7 @@ from pydantic import BaseModel, Field
 from pipelines.common import ROOT, write_json
 from pipelines.pdf.extract import extract
 from pipelines.run import run
+from pipelines.web.ai import propose
 from pipelines.web.review import Draft, draft_from_extraction, validate_draft
 
 log = logging.getLogger(__name__)
@@ -187,6 +189,32 @@ class Projects:
             log.exception("Local project operation failed")
             self.update(ident, status="failed", stage="extraction_failed", error=str(exc)[:3000])
 
+    def interpret(self, ident):
+        try:
+            draft, usage = propose(self.folder(ident) / "source.pdf", self.raw(ident))
+            with self.lock:
+                state = self.get(ident)
+                _, issues = validate_draft(draft, self.raw(ident), ident)
+                state.update(
+                    draft=draft,
+                    ai_usage=usage,
+                    revision=state["revision"] + 1,
+                    status="review",
+                    stage="review",
+                    issues=issues,
+                    error=None,
+                )
+                state.pop("manifest_url", None)
+                self.save(state)
+        except Exception:
+            log.exception("AI interpretation failed")
+            self.update(
+                ident,
+                status="review",
+                stage="review",
+                error="No se pudo interpretar con OpenAI. Comprueba la clave, cuota y acceso al modelo; el borrador anterior se conserva.",
+            )
+
     def generate(self, ident, geometry, revision):
         folder = self.folder(ident)
         try:
@@ -330,6 +358,25 @@ def create_app(
             )
             state.pop("manifest_url", None)
             return projects.save(state)
+
+    @app.post("/api/projects/{ident}/interpret", status_code=202)
+    def interpret_project(ident: str, body: Revision):
+        with projects.lock:
+            state = projects.get(ident)
+            projects.check_revision(state, body.revision)
+            if not os.getenv("OPENAI_API_KEY"):
+                raise HTTPException(
+                    503,
+                    "Configura OPENAI_API_KEY en el servidor local y reinícialo. No pegues la clave en el chat.",
+                )
+            if not state.get("pages"):
+                raise HTTPException(409, "Primero debe completarse la extracción del PDF.")
+            if (projects.folder(ident) / "source.pdf").stat().st_size > 20 * 1024**2:
+                raise HTTPException(413, "OpenAI admite aquí PDF de hasta 20 MiB.")
+            state.update(status="running", stage="interpreting", error=None)
+            projects.save(state)
+            projects.executor.submit(projects.interpret, ident)
+            return state
 
     @app.post("/api/projects/{ident}/validate")
     def validate(ident: str, body: Revision):

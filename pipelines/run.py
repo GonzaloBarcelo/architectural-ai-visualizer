@@ -71,6 +71,8 @@ def web_manifest(g, output):
         "project_id": g.project_id,
         "title": g.title,
         "synthetic": g.synthetic,
+        "conceptual": g.conceptual,
+        "assumptions": g.assumptions,
         "units": "m",
         "model_url": "model.glb",
         "renders": [
@@ -136,8 +138,9 @@ def run(args):
             {
                 "passed": True,
                 "synthetic": g.synthetic,
-                "missing_information": g.missing_information,
+                "conceptual": g.conceptual,
                 "assumptions": g.assumptions,
+                "missing_information": g.missing_information,
                 "source_sha256": g.source.sha256,
                 "method": "explicit annotated test drawing"
                 if g.synthetic

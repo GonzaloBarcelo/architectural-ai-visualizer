@@ -1,3 +1,15 @@
+# Interpretación conceptual con OpenAI
+
+El botón **Interpretar PDF con OpenAI** envía el PDF a la API y consume tokens. Requiere `OPENAI_API_KEY` en el entorno del servidor; no introduzcas la clave en el chat ni la guardes en Git. `OPENAI_MODEL` permite elegir un modelo con visión y salidas estructuradas (predeterminado: `gpt-4.1`). Reinicia el servidor después de configurar las variables.
+
+Después de subir el PDF, pulsa el botón de interpretación. Revisa los contornos propuestos, las medidas y la lista editable de supuestos. El modelo propone alturas cuando no están documentadas; los acabados siguen siendo ilustrativos. Pulsa **Aceptar propuesta y supuestos para generar**, después **Comprobar datos** y **Generar renders y 3D**. La aceptación no convierte las inferencias en medidas verificadas. Una geometría incoherente sigue bloqueando Blender y requiere corrección en el editor.
+
+La propuesta admite una planta por ejecución y PDFs de hasta 20 MiB. Cada clic inicia una petición facturable (sin reintentos automáticos), limitada a 16.000 tokens de salida; el consumo se conserva en el proyecto. No se garantiza interpretación correcta de cualquier plano. Los renders proceden de Blender y comparten geometría con el GLB; no hay mejora de imágenes con IA implementada.
+
+La integración está probada con respuestas simuladas; falta validar una petición real con credenciales y revisar la fidelidad de EA_01_MOD.pdf. La API recibe el documento; `store=False` no equivale a prometer retención cero por el proveedor.
+
+---
+
 # Guía del flujo web — 2026-11-09
 
 1. Instala las dependencias con `uv sync --locked` y `npm --prefix site ci`. Compila con `npm --prefix site run build`.

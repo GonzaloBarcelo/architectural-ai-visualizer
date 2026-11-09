@@ -5,7 +5,7 @@ import './Workflow.css';
 type Point = [number, number];
 type Kind = 'wall' | 'slab' | 'room' | 'door' | 'window' | 'roof';
 type Entity = { id: string; kind: Kind; polygon: Point[]; height?: number | null; thickness?: number | null; elevation?: number | null; sill?: number | null; wall_id?: string; name?: string; confirmed: boolean };
-type Draft = { page: number; title: string; calibration: { points: Point[]; metres: number | null; confirmed: boolean }; floor: { name: string; elevation: number | null; confirmed: boolean }; entities: Entity[]; complete: boolean };
+type Draft = { conceptual?: boolean; assumptions?: string[]; page: number; title: string; calibration: { points: Point[]; metres: number | null; confirmed: boolean }; floor: { name: string; elevation: number | null; confirmed: boolean }; entities: Entity[]; complete: boolean };
 type Issue = { path: string; message: string };
 type Candidate = { id: string; polygon: Point[]; label: string };
 type Page = { page: number; width: number; height: number; image_url: string; candidates: Candidate[] };
@@ -14,7 +14,7 @@ type ProjectSummary = Pick<Project, 'id' | 'filename' | 'status' | 'stage'>;
 const labels: Record<Kind, string> = { wall: 'Muro', slab: 'Suelo / losa', room: 'Habitación', door: 'Puerta', window: 'Ventana', roof: 'Cubierta' };
 const kindColors: Record<Kind, string> = { wall: '#61704e', slab: '#b28a4d', room: '#8c72ae', door: '#bb6848', window: '#3b8598', roof: '#817768' };
 const busyStates = new Set(['extracting', 'queued', 'running']);
-const stages: Record<string, string> = { extracting:'Extrayendo el plano', validating_geometry:'Validando geometría', modeling:'Modelando y preparando vistas', preview_qa:'Comprobando la escena', rendering:'Renderizando imágenes finales', final_qa:'Comprobando las imágenes', exporting:'Optimizando y validando el 3D', completed:'Entrega validada', queued:'Esperando turno', review:'Completa los datos pendientes', generation_failed:'Error de generación', extraction_failed:'Error al leer el PDF', interrupted:'Proceso interrumpido' };
+const stages: Record<string, string> = { interpreting:'Interpretando con OpenAI', extracting:'Extrayendo el plano', validating_geometry:'Validando geometría', modeling:'Modelando y preparando vistas', preview_qa:'Comprobando la escena', rendering:'Renderizando imágenes finales', final_qa:'Comprobando las imágenes', exporting:'Optimizando y validando el 3D', completed:'Entrega validada', queued:'Esperando turno', review:'Completa los datos pendientes', generation_failed:'Error de generación', extraction_failed:'Error al leer el PDF', interrupted:'Proceso interrumpido' };
 const phases: Record<string, string> = { extracting: 'Leyendo el PDF', review: 'Revisión pendiente', queued: 'En cola', running: 'Generando', succeeded: 'Resultados listos', failed: 'Necesita atención' };
 
 class ApiError extends Error {
@@ -137,7 +137,7 @@ export default function Workflow({ onResult }: { onResult: (url: string) => void
     const saved = await request<Project>(`/api/projects/${project.id}/draft`,{method:'PUT',body:JSON.stringify({draft,revision:project.revision})});
     remember(saved); return saved;
   };
-  const action = async (operation: 'save'|'validate'|'generate') => {
+  const action = async (operation: 'save'|'validate'|'generate'|'interpret') => {
     if (!project || !draft || busy) return;
     setWorking(true); setError(''); setNotice(''); setIssues([]);
     try {
@@ -172,6 +172,8 @@ export default function Workflow({ onResult }: { onResult: (url: string) => void
     {project ? <div className="wf-job" role="status"><span className={`status-dot ${busy?'pulse':''}`}/><strong>{phases[project.status]}</strong><span>{stages[project.stage] ?? project.stage}</span>{project.status==='succeeded'&&project.manifest_url?<button onClick={()=>{onResult(project.manifest_url!);document.getElementById("explore")?.scrollIntoView({behavior:"smooth"});}}>Ver renders y 3D ↓</button>:null}</div> : null}
     {project?.error ? <div className="wf-message wf-error" role="alert"><strong>La generación se ha detenido.</strong><p>{project.error}</p><p>Corrige la revisión y vuelve a generar. El PDF original se conserva.</p></div> : null}
     {draft && page ? <fieldset className="wf-editor" disabled={busy}><legend className="sr-only">Revisión del plano</legend>
+      <div className="wf-message"><strong>Interpretación automática con OpenAI</strong><p>Envía este PDF a OpenAI para proponer contornos y medidas. Consume tokens de tu cuenta API. La propuesta conceptual puede contener errores; podrás editarla antes de generar.</p><button type="button" onClick={()=>void action('interpret')}>Interpretar PDF con OpenAI</button></div>
+      {draft.conceptual ? <div className="wf-message"><strong>Propuesta conceptual · No es una reconstrucción certificada</strong><p>Las medidas y contornos propuestos siguen siendo inferidos aunque aceptes utilizarlos. Edita las alturas en cada elemento; esta lista documenta los supuestos y no modifica las medidas.</p><label className="wf-field">Supuestos y limitaciones<textarea rows={6} value={(draft.assumptions??[]).join('\n')} onChange={e=>mutate(d=>({...d,assumptions:e.target.value.split('\n')}))}/></label><button type="button" onClick={()=>{setDraft(d=>d?{...d,calibration:{...d.calibration,confirmed:true},floor:{...d.floor,confirmed:true},entities:d.entities.map(e=>({...e,confirmed:true})),complete:true}:d);setDirty(true);}}>Aceptar propuesta y supuestos para generar</button></div> : null}
       <div className="wf-review-meta"><label className="wf-field"><span>Nombre del proyecto</span><input value={draft.title} onChange={e=>mutate(d=>({...d,title:e.target.value}))}/></label><label className="wf-field"><span>Página del PDF</span><select value={draft.page} onChange={e=>switchPage(Number(e.target.value))}>{project?.pages?.map(p=><option key={p.page} value={p.page}>Página {p.page}</option>)}</select></label><p>Una página y una planta por proyecto. Los trazos detectados son candidatos, no elementos confirmados.</p></div>
       <div className="wf-review-layout"><div className="wf-plan-column">
         <div className="wf-drawing-tools" role="group" aria-label="Herramientas del plano"><button type="button" aria-pressed={mode==='select'} onClick={()=>{setMode('select');setPoints([]);}}>Seleccionar</button><button type="button" aria-pressed={mode==='scale'} onClick={()=>{setMode('scale');setPoints([]);}}>Marcar cota</button><select aria-label="Tipo de elemento a dibujar" value={kind} onChange={e=>setKind(e.target.value as Kind)}>{Object.entries(labels).map(([key,label])=><option key={key} value={key}>{label}</option>)}</select><button type="button" aria-pressed={mode==='draw'} onClick={()=>{setMode('draw');setPoints([]);}}>Dibujar contorno</button></div>

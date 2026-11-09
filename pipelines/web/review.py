@@ -36,6 +36,8 @@ class ElementDraft(Strict):
 
 
 class Draft(Strict):
+    conceptual: bool = False
+    assumptions: list[str] = Field(default_factory=list, max_length=100)
     page: int = Field(default=1, ge=1)
     title: str = Field(default="Proyecto", max_length=200)
     calibration: Calibration = Field(default_factory=Calibration)
@@ -208,12 +210,16 @@ def validate_draft(value, raw, project_id):
         return {
             "page": d.page,
             "pdf_coordinates": points,
-            "note": note,
-            "status": "verified",
-            "confidence": 1,
+            "note": "Propuesta conceptual aceptada; valores inferidos. " + note
+            if d.conceptual
+            else note,
+            "status": "inferred" if d.conceptual else "verified",
+            "confidence": 0.5 if d.conceptual else 1,
         }
 
     data = {
+        "conceptual": d.conceptual,
+        "assumptions": d.assumptions,
         "project_id": project_id,
         "title": d.title.strip(),
         "synthetic": raw.get("synthetic_marker", False),

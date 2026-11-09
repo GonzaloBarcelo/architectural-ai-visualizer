@@ -89,6 +89,7 @@ class Geometry(Strict):
     project_id: str
     title: str
     synthetic: bool = False
+    conceptual: bool = False
     units: Literal["m"] = "m"
     source: Source
     transform: Transform
@@ -158,7 +159,8 @@ class Geometry(Strict):
             *self.outdoor_areas,
             *self.measurements,
         ]
-        unknown = [x.id for x in entities if x.evidence.status != "verified"]
+        allowed = {"verified", "inferred"} if self.conceptual and self.assumptions else {"verified"}
+        unknown = [x.id for x in entities if x.evidence.status not in allowed]
         if self.missing_information or unknown:
             raise ValueError(
                 f"Review required: {self.missing_information}; unverified entities: {unknown}"
