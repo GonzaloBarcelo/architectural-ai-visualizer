@@ -1,11 +1,14 @@
 """Opt-in, paid PDF interpretation. Output is conceptual, never measured truth."""
 
 import base64
+import json
 import os
 from typing import Literal
 
 from openai import OpenAI
 from pydantic import BaseModel, ConfigDict
+from shapely.geometry import LineString
+from shapely.ops import polygonize, unary_union
 
 from pipelines.web.review import Draft
 
@@ -39,6 +42,47 @@ class AIPlan(BaseModel):
     entities: list[AIElement]
 
 
+def vector_context(raw):
+    """Compact source coordinates help avoid estimating pixel positions from page images."""
+    pages = []
+    for page in raw["pages"]:
+        filled = []
+        for drawing in page["drawings"]:
+            color = drawing.get("fill")
+            if not color or max(color) > 0.6:
+                continue
+            lines = [LineString(item[1:3]) for item in drawing["items"] if item[0] == "l"]
+            shapes = list(polygonize(unary_union(lines))) if lines else []
+            if shapes:
+                combined = unary_union(shapes)
+                polygons = [combined] if combined.geom_type == "Polygon" else list(combined.geoms)
+                for polygon in polygons:
+                    if polygon.area > 2 and not polygon.interiors:
+                        filled.append(
+                            {
+                                "source": drawing["index"],
+                                "polygon": [
+                                    [round(x, 2), round(y, 2)]
+                                    for x, y in list(polygon.exterior.coords)[:-1]
+                                ],
+                            }
+                        )
+        blocks = [
+            {"bounds": [round(v, 2) for v in b[:4]], "text": b[4]}
+            for b in page.get("text_blocks", [])
+            if len(b) > 4 and isinstance(b[4], str)
+        ]
+        pages.append(
+            {
+                "page": page["page"],
+                "size_points": page["size_points"],
+                "filled_candidates": filled[:120],
+                "text_positions": blocks[:180],
+            }
+        )
+    return json.dumps(pages, ensure_ascii=False, separators=(",", ":"))
+
+
 def propose(path, raw, client=None):
     if client is None and not os.getenv("OPENAI_API_KEY"):
         raise ValueError(
@@ -60,6 +104,11 @@ def propose(path, raw, client=None):
             "into non-overlapping simple polygons without holes. Openings are rectangular polygons "
             "inside the host wall spanning its thickness; walls must include their opening footprint. "
             "Include floor slab and rooms. Do not model furniture as walls. Do not invent a roof. "
+            "Use the supplied vector coordinates as anchors, never arbitrary image-space guesses. "
+            "Filled candidates are drawn shapes, not automatically walls; exclude legends and furniture. "
+            "Where explicit scale 1:N exists, metres_per_PDF_point = N*0.0254/72; cross-check with a drawn dimension. "
+            "Derive wall thickness from the polygon short side times scale. Slab thickness belongs in thickness, not height. "
+            "Room polygons must be simple and fit inside the walls; preserve the building's concave footprint. "
             "When absent assume wall height 2.7m, door height 2.1m, window sill 0.9m and height 1.2m, "
             "slab thickness .2m at elevation -.2m, floor elevation 0m. Record ALL assumptions and "
             "uncertainties in Spanish including approximate contours, finishes and ambiguous scale. "
@@ -77,7 +126,7 @@ def propose(path, raw, client=None):
                     },
                     {
                         "type": "input_text",
-                        "text": f"Page sizes in PDF points: {sizes}. Build the conceptual proposal.",
+                        "text": f"Page sizes in PDF points: {sizes}. Source geometry and text coordinates: {vector_context(raw)}. Build the conceptual proposal.",
                     },
                 ],
             }

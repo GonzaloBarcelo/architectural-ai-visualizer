@@ -1,3 +1,13 @@
+# Automatic interpretation and source comparison
+
+New uploads automatically request OpenAI interpretation when the local server has a key. A private cache keyed by PDF digest, model and prompt version avoids repeated API calls; the original AI proposal and token usage are retained alongside the editable draft. The web compares the original PDF and proposed geometry side by side (stacked on narrow screens).
+
+Live EA_01_MOD.pdf attempt: OpenAI gpt-4.1 returned 21 entities using 2,149 input tokens (1,920 cached) and 3,135 output tokens: 5,284 total. This proposal FAILED geometric review: wrong scale/contours, inconsistent wall thickness, missing slab thickness and invalid room polygon. It was not rendered or presented as successful reconstruction.
+
+The next prompt includes actual vector polygon coordinates and text positions (57 filled candidates in this document), plus the explicit PDF scale conversion. This revision awaits a server restart and live validation. No perfect reconstruction or globally minimum token consumption is claimed. Automated suite: 60 passed, including upload-to-AI and identical-PDF cache reuse; frontend build and Ruff pass. No deployment.
+
+---
+
 # Extension: conceptual OpenAI interpretation
 
 Web opt-in PDF interpretation through Responses structured outputs is implemented. Server-side key required; default model gpt-4.1, configurable via OPENAI_MODEL. Proposed contours/dimensions and assumptions enter the editor; explicit conceptual acceptance preserves inferred provenance while allowing generation. All geometric QA remains enabled. No image enhancement endpoint. No publication.

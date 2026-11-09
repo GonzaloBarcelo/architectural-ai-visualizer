@@ -304,3 +304,32 @@ def test_interrupted_job_is_recoverable_on_restart(setup_paths, pdf):
             c.post(route + "/generate", json={"revision": recovered["revision"]}).status_code == 202
         )
         assert wait_project(c, project["id"], ("succeeded",))["status"] == "succeeded"
+
+
+def test_upload_auto_interprets_and_reuses_pdf_cache(client, pdf, monkeypatch):
+    from pipelines.web.review import draft_from_extraction
+
+    calls = []
+
+    def fake_propose(path, raw):
+        calls.append(path)
+        draft = draft_from_extraction(raw, "test", "Concept")
+        draft.update(conceptual=True, assumptions=["Test assumption"])
+        return draft, {"model": "test", "usage": {"total_tokens": 10}}
+
+    monkeypatch.setenv("OPENAI_API_KEY", "test-only-not-real")
+    monkeypatch.setattr("pipelines.web.server.propose", fake_propose)
+    first = upload(client, pdf)
+    # Ingest and interpretation share the background worker; wait for AI result.
+    deadline = time.monotonic() + 5
+    while "ai_usage" not in first and time.monotonic() < deadline:
+        time.sleep(0.01)
+        first = client.get(f"/api/projects/{first['id']}").json()
+    assert first["draft"]["conceptual"]
+    assert first["ai_interpretation"]["assumptions"] == ["Test assumption"]
+    second = upload(client, pdf)
+    while "ai_usage" not in second and time.monotonic() < deadline:
+        time.sleep(0.01)
+        second = client.get(f"/api/projects/{second['id']}").json()
+    assert second["ai_usage"]["cache_hit"]
+    assert len(calls) == 1

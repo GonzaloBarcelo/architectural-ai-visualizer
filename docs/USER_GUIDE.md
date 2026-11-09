@@ -1,3 +1,11 @@
+# Envío automático y comparación
+
+Al subir un PDF, el servidor lo interpreta con OpenAI automáticamente si dispone de OPENAI_API_KEY. El aviso junto a la carga identifica el uso de la API. El PDF original aparece a la izquierda y la propuesta editable a la derecha; en pantallas estrechas se apilan. Los contornos son inferencias y requieren revisión.
+
+La interpretación se reutiliza localmente para el mismo PDF, modelo y versión del prompt. El botón Interpretar recupera esa caché si existe; cambiar medidas en el editor no consume tokens. Los archivos y la caché permanecen en outputs/web-projects, fuera de Git. El consumo depende del documento y del modelo, no tiene un mínimo garantizado. La petición incluye coordenadas vectoriales y posiciones del texto para ayudar a localizar elementos. No se garantiza una interpretación perfecta.
+
+---
+
 # Interpretación conceptual con OpenAI
 
 El botón **Interpretar PDF con OpenAI** envía el PDF a la API y consume tokens. Requiere `OPENAI_API_KEY` en el entorno del servidor; no introduzcas la clave en el chat ni la guardes en Git. `OPENAI_MODEL` permite elegir un modelo con visión y salidas estructuradas (predeterminado: `gpt-4.1`). Reinicia el servidor después de configurar las variables.

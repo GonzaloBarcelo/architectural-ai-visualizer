@@ -185,19 +185,42 @@ class Projects:
                 issues=issues,
                 error=None,
             )
+            if os.getenv("OPENAI_API_KEY"):
+                self.update(ident, status="running", stage="interpreting")
+                self.interpret(ident)
+            else:
+                self.update(
+                    ident,
+                    error="La interpretación automática requiere OPENAI_API_KEY en el servidor.",
+                )
         except Exception as exc:
             log.exception("Local project operation failed")
             self.update(ident, status="failed", stage="extraction_failed", error=str(exc)[:3000])
 
     def interpret(self, ident):
         try:
-            draft, usage = propose(self.folder(ident) / "source.pdf", self.raw(ident))
+            raw = self.raw(ident)
+            import hashlib
+
+            cache_key = hashlib.sha256(
+                (
+                    raw["source"]["sha256"] + os.getenv("OPENAI_MODEL", "gpt-4.1") + ":proposal-v2"
+                ).encode()
+            ).hexdigest()
+            cache_path = self.root / "ai-cache" / (cache_key + ".json")
+            if cache_path.is_file():
+                cached = json.loads(cache_path.read_text())
+                draft, usage = cached["draft"], {**cached["usage"], "cache_hit": True}
+            else:
+                draft, usage = propose(self.folder(ident) / "source.pdf", raw)
+                write_json(cache_path, {"draft": draft, "usage": usage})
             with self.lock:
                 state = self.get(ident)
                 _, issues = validate_draft(draft, self.raw(ident), ident)
                 state.update(
                     draft=draft,
                     ai_usage=usage,
+                    ai_interpretation=draft,
                     revision=state["revision"] + 1,
                     status="review",
                     stage="review",
