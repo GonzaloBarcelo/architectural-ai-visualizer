@@ -416,6 +416,7 @@ def interiors(scene, data, top, collection, palette):
         cam = camera(scene, name, (x, y, eye), target)
         cam.data.lens = 14 if small else 17
         cam["view_label"] = "Interior · " + room["name"]
+        cam["room_id"] = room["id"]
         cam["view_order"] = 2 + i
         cam["exposure"] = -0.2
 
@@ -613,10 +614,97 @@ def render_views(scene, output, preset, config):
             obj.hide_render = True
     scene.view_settings.exposure = 0.0
     scene.view_layers[0].material_override = None
-    dump(
-        output / "views.json",
-        [{"id": c.name, "label": c["view_label"]} for c in views(scene)],
-    )
+    dump(output / "views.json", [view_record(c) for c in views(scene)])
+
+
+def view_record(cam):
+    """Gallery entry plus what the enhancement brief needs: room and camera pose."""
+    forward = cam.rotation_euler.to_matrix() @ Vector((0, 0, -1))
+    return {
+        "id": cam.name,
+        "label": cam["view_label"],
+        "room_id": cam.get("room_id"),
+        "camera": {
+            "type": cam.data.type,
+            "position": [round(v, 4) for v in cam.location],
+            "forward": [round(v, 4) for v in forward],
+            "lens": round(cam.data.lens, 3),
+            "sensor": round(cam.data.sensor_width, 3),
+        },
+    }
+
+
+MASK_CLASSES = {
+    # Red: built structure; green: openings and joinery; blue: furniture. Others stay black.
+    "wall": (1, 0, 0), "slab": (1, 0, 0), "roof": (1, 0, 0), "floor_finish": (1, 0, 0),
+    "door": (0, 1, 0), "window": (0, 1, 0), "joinery": (0, 1, 0),
+    "furniture": (0, 0, 1),
+}
+
+
+def render_masks(scene, output, config):
+    """Flat class mask per view (masks/<view>.png), pixel-aligned with the final render.
+
+    Used only by the illustrative AI enhancement to check furniture and opening silhouettes;
+    cheap: emission override, few samples, no denoising, Raw view transform.
+    """
+    folder = output / "masks"
+    folder.mkdir(exist_ok=True)
+    saved = {
+        "samples": scene.cycles.samples,
+        "denoise": scene.cycles.use_denoising,
+        "filter": scene.cycles.filter_width,
+        "transform": scene.view_settings.view_transform,
+        "exposure": scene.view_settings.exposure,
+        "colors": {o.name: tuple(o.color) for o in scene.objects},
+    }
+    bg = scene.world.node_tree.nodes["Background"]
+    old_bg = bg.inputs[0].default_value[:]
+    mat = bpy.data.materials.new("QA class mask")
+    mat.use_nodes = True
+    nodes = mat.node_tree.nodes
+    nodes.clear()
+    out = nodes.new("ShaderNodeOutputMaterial")
+    emit = nodes.new("ShaderNodeEmission")
+    info = nodes.new("ShaderNodeObjectInfo")
+    mat.node_tree.links.new(info.outputs["Color"], emit.inputs["Color"])
+    mat.node_tree.links.new(emit.outputs[0], out.inputs["Surface"])
+    try:
+        for obj in scene.objects:
+            colour = MASK_CLASSES.get(obj.get("kind"))
+            if colour is None and obj.name.startswith("Ceiling /") and obj.type == "MESH":
+                colour = (1, 0, 0)
+            obj.color = (*(colour or (0, 0, 0)), 1)
+        scene.view_layers[0].material_override = mat
+        bg.inputs[0].default_value = (0, 0, 0, 1)
+        scene.cycles.samples = 4
+        scene.cycles.use_denoising = False
+        scene.cycles.filter_width = 0.01
+        scene.view_settings.view_transform = "Raw"
+        scene.view_settings.exposure = 0.0
+        scene.render.resolution_x = config["resolution"][0]
+        scene.render.resolution_y = config["resolution"][1]
+        for cam in views(scene):
+            inside = cam.name.startswith("interior")
+            for obj in scene.objects:
+                if obj.get("interior_only"):
+                    obj.hide_render = not inside
+            scene.camera = cam
+            scene.render.filepath = str(folder / (cam.name + ".png"))
+            bpy.ops.render.render(write_still=True)
+    finally:
+        for obj in scene.objects:
+            if obj.get("interior_only"):
+                obj.hide_render = True
+            if obj.name in saved["colors"]:
+                obj.color = saved["colors"][obj.name]
+        scene.view_layers[0].material_override = None
+        bg.inputs[0].default_value = old_bg
+        scene.cycles.samples = saved["samples"]
+        scene.cycles.use_denoising = saved["denoise"]
+        scene.cycles.filter_width = saved["filter"]
+        scene.view_settings.view_transform = saved["transform"]
+        scene.view_settings.exposure = saved["exposure"]
 
 
 def render_top(scene, output):
@@ -756,6 +844,10 @@ def main():
         dump(output / "render-config.json", config)
         if args.stage == "final":
             render_views(scene, output, "final", config["final"])
+            try:
+                render_masks(scene, output, config["final"])
+            except (RuntimeError, KeyError, ValueError, TypeError) as exc:  # optional pass
+                print(f"AAV_MASKS_SKIPPED={type(exc).__name__}: {exc}")
         export_glb(scene, output)
     print("AAV_STAGE_COMPLETE=" + args.stage)
 
