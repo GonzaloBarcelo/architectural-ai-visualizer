@@ -229,3 +229,28 @@ def test_run_rechecks_the_dwg_hash_and_format(tmp_path):
     dxf_file.write_bytes(b"AC1032 synthetic")
     with pytest.raises(ValueError, match="format"):
         source_check(geometry, {"source": cad_source(dxf_file)})
+
+
+def test_corner_wardrobe_backs_onto_its_long_side_not_the_wall_at_its_end(tmp_path):
+    doc = ezdxf.new()
+    doc.header["$INSUNITS"] = 4
+    wardrobe = doc.blocks.new("ARMARIO_100")  # 0.5 × 1.0 m; insert convention: front local -y
+    wardrobe.add_lwpolyline([(0, 0), (500, 0), (500, 1000), (0, 1000)], close=True)
+    msp = doc.modelspace()
+    for x0, y0, x1, y1 in __import__("dxf_fixture").WALLS:
+        msp.add_lwpolyline(
+            [(x0, y0), (x1, y0), (x1, y1), (x0, y1)], close=True, dxfattribs={"layer": "MUROS"}
+        )
+    # In the north-west corner: its local back (+y, a short end) and its long west side both
+    # touch walls. A wardrobe stands on its long side, so it must face east.
+    msp.add_blockref("ARMARIO_100", (200, 2800), dxfattribs={"layer": "MUEBLES"})
+    msp.add_text("Dormitorio", dxfattribs={"insert": (1500, 1500), "height": 100})
+    msp.add_text("Baño", dxfattribs={"insert": (4500, 1500), "height": 100})
+    path = tmp_path / "corner.dxf"
+    doc.saveas(path)
+    draft, summary, _ = dwg.propose(path, SOURCE, call_ai=False)
+    item = next(e for e in entities(draft, "furniture") if e["name"].startswith("wardrobe"))
+    back, front = item["polygon"][:2], item["polygon"][2:]
+    assert all(p[0] == pytest.approx(170) for p in back)  # west wall face x = 0.2 m
+    assert all(p[0] == pytest.approx(220) for p in front)
+    assert not summary["pending"]

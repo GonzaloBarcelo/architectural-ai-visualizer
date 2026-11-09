@@ -17,7 +17,7 @@ from typing import Literal
 
 from pydantic import BaseModel, Field
 from shapely import affinity
-from shapely.geometry import Point, Polygon
+from shapely.geometry import LineString, Point, Polygon
 from shapely.ops import unary_union
 
 from pipelines.cad import config as C
@@ -182,28 +182,52 @@ def room_name_at(rooms, point):
     return next((r["name"] or r["id"] for r in rooms if r["polygon"].contains(p)), None)
 
 
+def outward_clearance(segment, rect, walls, reach=0.3):
+    """Metres from the middle of a side to the walls straight in front of it (outwards only),
+    so a wall meeting the piece at a corner is not taken for the wall behind it."""
+    a = segment.interpolate(0.2, normalized=True)
+    b = segment.interpolate(0.8, normalized=True)
+    dx, dy = b.x - a.x, b.y - a.y
+    length = math.hypot(dx, dy) or 1
+    nx, ny = -dy / length, dx / length
+    c = rect.centroid
+    if (a.x - c.x) * nx + (a.y - c.y) * ny < 0:
+        nx, ny = -nx, -ny
+    r = reach / SHEET_UNIT
+    strip = Polygon(
+        [(a.x, a.y), (b.x, b.y), (b.x + nx * r, b.y + ny * r), (a.x + nx * r, a.y + ny * r)]
+    )
+    hit = walls.intersection(strip)
+    return math.inf if hit.is_empty else LineString([a, b]).distance(hit) * SHEET_UNIT
+
+
+def settle_front(kind, rect, front, walls):
+    """(front, note, doubtful) for a wall-backed piece in sheet units: its back must touch a
+    wall on the side its kind allows (long side of a wardrobe, short end of a bed…)."""
+    rule = F.WALL_BACKED.get(kind)
+    if not rule:
+        return front, None, False
+    sides = F._sides(rect)
+    lengths = {s: seg.length for s, seg in sides.items()}
+    touching = [s for s, seg in sides.items() if outward_clearance(seg, rect, walls) <= 0.12]
+    if rule != "any":
+        shortest, longest = min(lengths.values()), max(lengths.values())
+        if longest - shortest > 0.05 * shortest:
+            short = rule == "short"
+            touching = [s for s in touching if (lengths[s] - shortest < 1e-6) == short]
+    back = F.OPPOSITE[front]
+    if back in touching:
+        return front, None, False
+    if len(touching) == 1:
+        new = F.OPPOSITE[touching[0]]
+        return new, f"respaldo apoyado en el muro ({touching[0]}), frente hacia {new}", False
+    return front, None, True
+
+
 def front_doubt(item, sheet, walls_sheet):
     """True when the walls cannot settle which side is the back of a wall-backed piece."""
-    rule = F.WALL_BACKED.get(item["kind"])
-    if not rule:
-        return False
     rect = sheet.shape(item["rect"])
-    sides = F._sides(rect)
-    front = side_of(item["front"])
-    clearance = {s: F.side_clearance(seg, walls_sheet, SHEET_UNIT) for s, seg in sides.items()}
-    if clearance[F.OPPOSITE[front]] <= 0.12:
-        return False
-    lengths = {s: seg.length for s, seg in sides.items()}
-    touching = [s for s in sides if clearance[s] <= 0.12]
-    if rule != "any":
-        shortest = min(lengths.values())
-        square = abs(max(lengths.values()) - shortest) < 0.05 * shortest
-        touching = [
-            s
-            for s in touching
-            if square or (abs(lengths[s] - shortest) < 1e-6) == (rule == "short")
-        ] or touching
-    return len(touching) != 1
+    return settle_front(item["kind"], rect, side_of(item["front"]), walls_sheet)[2]
 
 
 def doubts(reading):
@@ -747,7 +771,10 @@ def assemble(reading, answers, source, notes_ai=()):
     tables = [sheet.shape(f["rect"]) for f, kind, *_ in placed if kind in F.TABLES]
     for i, (f, kind, name, front, status) in enumerate(placed):
         rect = sheet.shape(f["rect"])
-        front, note = F.resolve_front(kind, rect, front, walls_sheet, tables, SHEET_UNIT)
+        if kind in F.FACES_TABLE:
+            front, note = F.resolve_front(kind, rect, front, walls_sheet, tables, SHEET_UNIT)
+        else:
+            front, note, _ = settle_front(kind, rect, front, walls_sheet)
         detail = f"Bloque {f['block']}" if f["block"] else f"Contorno en {f['layer']}"
         if note:
             detail += f"; orientación corregida: {note}"
