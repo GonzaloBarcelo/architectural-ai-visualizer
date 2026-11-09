@@ -45,8 +45,13 @@ class Wall(Surface):
     height: float = Field(gt=0)
 
 
+OpeningStyle = Literal["hinged", "sliding", "glazed", "fixed", "casement"]
+FloorFinish = Literal["wood", "tile", "stone"]
+
+
 class Opening(Entity):
     kind: Literal["door", "window"]
+    style: OpeningStyle | None = None
     wall_id: str
     polygon: list[Point] = Field(min_length=3)
     sill: float = Field(ge=0)
@@ -62,6 +67,7 @@ class Furniture(Entity):
 class Room(Entity):
     name: str
     polygon: list[Point] = Field(min_length=3)
+    floor_finish: FloorFinish | None = None
 
 
 class Floor(Strict):
@@ -90,7 +96,18 @@ class Source(Strict):
     page_count: int = Field(ge=1)
 
 
-FinishKey = Literal["walls", "floor", "doors", "furniture_wood", "upholstery", "ceramic"]
+FinishKey = Literal[
+    "walls",
+    "floor",
+    "tile",
+    "doors",
+    "joinery",
+    "furniture_wood",
+    "upholstery",
+    "stone",
+    "ceramic",
+    "metal",
+]
 
 
 class Finish(Strict):

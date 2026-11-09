@@ -7,7 +7,15 @@ from pydantic import Field, ValidationError
 from shapely.geometry import Polygon
 
 from pipelines.geometry.normalize import ReviewRequired, normalize
-from pipelines.geometry.schema import Finish, FinishKey, Geometry, Point, Strict
+from pipelines.geometry.schema import (
+    Finish,
+    FinishKey,
+    FloorFinish,
+    Geometry,
+    OpeningStyle,
+    Point,
+    Strict,
+)
 
 
 class Calibration(Strict):
@@ -32,6 +40,8 @@ class ElementDraft(Strict):
     sill: float | None = None
     wall_id: str | None = None
     name: str | None = Field(default=None, max_length=120)
+    style: OpeningStyle | None = None
+    finish: FloorFinish | None = None
     confirmed: bool = False
 
 
@@ -276,10 +286,10 @@ def validate_draft(value, raw, project_id):
             item.update(name=e.name or "Mueble conceptual", height=e.height)
             data["furniture"].append(item)
         elif e.kind == "room":
-            item["name"] = e.name
+            item.update(name=e.name, floor_finish=e.finish)
             data["rooms"].append(item)
         else:
-            item.update(kind=e.kind, sill=e.sill, height=e.height, wall_id=e.wall_id)
+            item.update(kind=e.kind, sill=e.sill, height=e.height, wall_id=e.wall_id, style=e.style)
             data["openings"].append(item)
     try:
         geometry = Geometry.model_validate(data).require_verified()

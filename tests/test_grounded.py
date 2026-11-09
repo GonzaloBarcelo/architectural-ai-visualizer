@@ -84,9 +84,20 @@ def test_model_cannot_invent_wall_identifier():
 def mock_client(selection, calls):
     from types import SimpleNamespace
 
+    from pipelines.web.furniture import FurnitureSelection
+    from pipelines.web.grounded import Review
+
+    empty = FurnitureSelection(labels=[], extras=[], notes=[])
+    answers = {
+        "Selection": selection,
+        "FurnitureSelection": empty,
+        "Review": Review(furniture=empty, opening_changes=[], findings=["Sin cambios"]),
+    }
+
     def parse(**kwargs):
         calls.append(kwargs)
-        return SimpleNamespace(output_parsed=selection, id=f"resp-{len(calls)}", usage=None)
+        value = answers[kwargs["text_format"].__name__]
+        return SimpleNamespace(output_parsed=value, id=f"resp-{len(calls)}", usage=None)
 
     return SimpleNamespace(responses=SimpleNamespace(parse=parse))
 
@@ -108,7 +119,14 @@ def test_selection_is_cached_by_pdf_and_reassembled_without_new_calls(tmp_path, 
     selection = Selection(wall_ids=list(walls), openings=[], furniture=[], uncertainties=[])
     calls = []
     draft, usage = propose(path, raw, mock_client(selection, calls), cache_dir=tmp_path / "cache")
-    assert len(calls) == 1 and calls[0]["store"] is False
+    # Walls/openings, furniture and self-review: three billed calls, none stored.
+    assert [c["text_format"].__name__ for c in calls] == [
+        "Selection",
+        "FurnitureSelection",
+        "Review",
+    ]
+    assert all(c["store"] is False for c in calls)
+    assert any("Sin cambios" in a for a in draft["assumptions"])
     assert not usage["cache_hit"] and draft["conceptual"]
     other = tmp_path / "other"
     other.mkdir()
@@ -130,7 +148,7 @@ def test_furniture_collisions_are_omitted_not_fatal_and_chairs_may_tuck_under_ta
     selection = Selection(wall_ids=list(walls), openings=[], furniture=furniture, uncertainties=[])
     draft = assemble(raw, selection, factor, walls, gaps)
     names = [e["name"] for e in draft["entities"] if e["kind"] == "furniture"]
-    assert names == ["table / Mesa", "chair / Silla"]
+    assert names == ["dining_table / Mesa", "chair / Silla"]
     omitted = [a for a in draft["assumptions"] if a.startswith("Mueble omitido")]
     assert len(omitted) == 2
 
