@@ -30,6 +30,7 @@ export default function App() {
   const [manifestUrl, setManifestUrl] = useState<string | null>(null);
   const [manifest, setManifest] = useState<Manifest | null>(null);
   const [error, setError] = useState('');
+  const [newRequest, setNewRequest] = useState(0);
   const [attempt, setAttempt] = useState(0);
   const [viewerAttempt, setViewerAttempt] = useState(0);
   useEffect(() => {
@@ -43,10 +44,10 @@ export default function App() {
   }, [attempt, manifestUrl]);
   return <>
     <a className="skip-link" href="#main">Ir al contenido</a>
-    <header className="site-header"><a href="#" className="wordmark" aria-label="González Cardona Arquitectura, inicio">GC<span className="wordmark-dot">.</span><span className="wordmark-sub">GONZÁLEZ CARDONA<br />ARQUITECTURA</span></a><nav aria-label="Navegación principal"><a href="#new-project">Nuevo proyecto</a>{manifest ? <><a href="#explore">Modelo 3D</a><a href="#renders">Renders</a></> : null}</nav><span className="edition">ESTUDIO DE VISUALIZACIÓN</span></header>
+    <header className="site-header"><a href="#" className="wordmark" aria-label="González Cardona Arquitectura, inicio">GC<span className="wordmark-dot">.</span><span className="wordmark-sub">GONZÁLEZ CARDONA<br />ARQUITECTURA</span></a><nav aria-label="Navegación principal"><a href="#new-project" onClick={()=>setNewRequest(n=>n+1)}>Nuevo proyecto</a>{manifest ? <><a href="#explore">Modelo 3D</a><a href="#renders">Renders</a></> : null}</nav><span className="edition">ESTUDIO DE VISUALIZACIÓN</span></header>
     <main id="main">
-      <section className="intro"><div className="intro-copy"><span className="eyebrow"><span className="status-dot" /> GONZÁLEZ CARDONA ARQUITECTURA</span><h1>Del plano,<br /><em>al espacio.</em></h1><p>Sube un plano en PDF, revisa la interpretación de la IA junto al original<br />y obtén renders y un modelo 3D generados con Blender.</p></div><div className="project-summary"><span className="eyebrow">CÓMO FUNCIONA</span><ol className="how-steps"><li><strong>01</strong> Plano PDF y, opcionalmente, materiales</li><li><strong>02</strong> Revisión lado a lado con el original</li><li><strong>03</strong> Renders y modelo 3D con Blender</li></ol><a href="#new-project" className="text-link">Empezar un proyecto <span aria-hidden="true">↓</span></a></div></section>
-      <Workflow onResult={url=>{setManifestUrl(url);setAttempt(n=>n+1);setError('');}} />
+      <section className="intro"><div className="intro-copy"><span className="eyebrow"><span className="status-dot" /> GONZÁLEZ CARDONA ARQUITECTURA</span><h1>Del plano,<br /><em>al espacio.</em></h1><p>Sube un plano en PDF, revisa la interpretación de la IA junto al original<br />y obtén renders y un modelo 3D generados con Blender.</p></div><div className="project-summary"><span className="eyebrow">CÓMO FUNCIONA</span><ol className="how-steps"><li><strong>01</strong> Plano PDF y, opcionalmente, materiales</li><li><strong>02</strong> Revisión lado a lado con el original</li><li><strong>03</strong> Renders y modelo 3D con Blender</li></ol><a href="#new-project" className="text-link" onClick={()=>setNewRequest(n=>n+1)}>Empezar un proyecto <span aria-hidden="true">↓</span></a></div></section>
+      <Workflow newRequest={newRequest} onResult={url=>{setManifestUrl(url);setAttempt(n=>n+1);setError('');}} />
       {error ? <section className="load-error" role="alert"><h2>Los renders aún no están disponibles.</h2><p>{error}</p><button onClick={() => setAttempt(n => n + 1)}>Volver a cargar</button></section> : !manifest || !manifestUrl ? null : <>
         <Gallery key={manifestUrl} manifest={manifest}/>
         <section id="explore" aria-labelledby="viewer-title" className="explore-section"><div className="section-topline"><span className="eyebrow" id="viewer-title">RESULTADO / MODELO 3D</span><span className={`qa-status ${manifest.quality.passed ? 'passed' : 'pending'}`}><span className="status-dot" />{manifest.conceptual ? 'Modelo conceptual · QA de la escena' : manifest.quality.passed ? 'Comprobación geométrica superada' : 'Pendiente de validación geométrica'}</span></div>

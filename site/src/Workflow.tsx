@@ -66,7 +66,7 @@ function PlanOverlay({ page, entities, faint, onSelect, selected }: { page: Page
   </svg>;
 }
 
-export default function Workflow({ onResult }: { onResult: (url: string | null) => void }) {
+export default function Workflow({ onResult, newRequest = 0 }: { onResult: (url: string | null) => void; newRequest?: number }) {
   const [projects, setProjects] = useState<ProjectSummary[]>([]);
   const [project, setProject] = useState<Project | null>(null);
   const [draft, setDraft] = useState<Draft | null>(null);
@@ -168,13 +168,23 @@ export default function Workflow({ onResult }: { onResult: (url: string | null) 
       remember(p); setOffline(false); setSelected(''); setPoints([]); setFile(null); setDescription(''); setShowAI(true);
     } catch (reason) { showError(reason); } finally { setWorking(false); }
   };
+  // Starting a new blueprint never waits for the current one: server jobs keep running and
+  // the project stays available from the "Proyectos" list.
   const newProject = () => {
-    if (busy || dirty && !window.confirm('Hay cambios sin guardar. ¿Descartarlos?')) return;
-    setProject(null); setDraft(null); setDirty(false); setError(''); setNotice(''); setIssues([]); shownResult.current = ''; onResult(null);
+    if (working || dirty && !window.confirm('Hay cambios sin guardar. ¿Descartarlos?')) return;
+    setProject(null); setDraft(null); setDirty(false); setError(''); setNotice(''); setIssues([]);
+    setSelected(''); setPoints([]); setMode('select'); setFile(null); setDescription(''); setShowAI(true);
+    shownResult.current = ''; onResult(null);
     try { localStorage.removeItem('gc-active-project'); } catch { /* Optional persistence. */ }
+    if (window.location.hash.startsWith('#project=')) window.history.replaceState(null, '', '#new-project');
+    void refreshProjects();
+    requestAnimationFrame(() => document.getElementById('new-project')?.scrollIntoView({behavior:'smooth'}));
   };
+  const newProjectRef = useRef(newProject);
+  newProjectRef.current = newProject;
+  useEffect(() => { if (newRequest) newProjectRef.current(); }, [newRequest]);
   const openProject = async (id: string) => {
-    if (!id || busy || dirty && !window.confirm('Hay cambios sin guardar. ¿Quieres descartarlos y abrir otro proyecto?')) return;
+    if (!id || working || dirty && !window.confirm('Hay cambios sin guardar. ¿Quieres descartarlos y abrir otro proyecto?')) return;
     setWorking(true); setError(''); shownResult.current = ''; onResult(null);
     try { remember(await request<Project>(`/api/projects/${id}`)); setSelected(''); setPoints([]); setNotice(''); }
     catch (reason) { showError(reason); } finally { setWorking(false); }
@@ -216,7 +226,7 @@ export default function Workflow({ onResult }: { onResult: (url: string | null) 
 
   return <section className="workflow" id="new-project" aria-labelledby="workflow-title">
     <div className="wf-heading"><div><span className="eyebrow">ESTUDIO DE VISUALIZACIÓN</span><h2 id="workflow-title">Del plano a los renders, en tres pasos.</h2><p>Sube el plano en PDF y, si quieres, describe los materiales. La IA interpreta el plano, lo revisas junto al original y Blender genera los renders y el modelo 3D.</p></div>
-      {projects.length ? <label className="wf-project-picker">Proyectos<select aria-label="Abrir proyecto" value={project?.id ?? ''} disabled={busy} onChange={e=>void openProject(e.target.value)}><option value="">Selecciona un proyecto</option>{projects.map(p=><option key={p.id} value={p.id}>{p.filename} · {phases[p.status]}</option>)}</select></label> : null}
+      {projects.length ? <label className="wf-project-picker">Proyectos<select aria-label="Abrir proyecto" value={project?.id ?? ''} disabled={working} onChange={e=>void openProject(e.target.value)}><option value="">Selecciona un proyecto</option>{projects.map(p=><option key={p.id} value={p.id}>{p.filename} · {phases[p.status]}</option>)}</select></label> : null}
     </div>
     <ol className="wf-steps" aria-label="Pasos del proyecto">
       {['Subir plano', 'Revisar interpretación', 'Renders con Blender'].map((label, i) => <li key={label} className={step === i + 1 ? 'active' : step > i + 1 ? 'done' : ''} aria-current={step === i + 1 ? 'step' : undefined}>{String(i + 1).padStart(2, '0')} <span>{label}</span></li>)}
@@ -239,7 +249,7 @@ export default function Workflow({ onResult }: { onResult: (url: string | null) 
     </form> : <>
       <div className="wf-job" role="status"><span className={`status-dot ${busy?'pulse':''}`}/><strong>{project.filename}</strong><span>{stages[project.stage] ?? project.stage}</span>
         {project.status==='succeeded'&&project.manifest_url?<button onClick={()=>document.getElementById('explore')?.scrollIntoView({behavior:'smooth'})}>Ver renders ↓</button>:null}
-        <button onClick={newProject} disabled={busy}>Nuevo plano</button></div>
+        <button type="button" onClick={newProject} disabled={working}>Nuevo plano</button></div>
       {rendering ? <div className="wf-progress" aria-label="Progreso de Blender"><div style={{width:`${Math.max(6, renderStages.indexOf(project.stage) / (renderStages.length - 1) * 100)}%`}}/></div> : null}
       {project.error ? <div className="wf-message wf-error" role="alert"><strong>{project.stage === 'generation_failed' ? 'La generación se ha detenido.' : 'Atención'}</strong><p>{project.error}</p>{!busy && project.pages?.length ? <button type="button" onClick={()=>void action('interpret')}>Reintentar interpretación</button> : null}</div> : null}
       {busy && !draft ? <div className="wf-wait"><span className="status-dot pulse"/>{stages[project.stage] ?? 'Procesando'}… Puede tardar uno o dos minutos.</div> : null}
