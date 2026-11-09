@@ -3,13 +3,32 @@ import type { ErrorInfo, ReactNode } from 'react';
 import { assetUrl, parseManifest } from './types';
 import type { Manifest } from './types';
 import Workflow from './Workflow';
-const Viewer = lazy(() => import('./Viewer'));
+// After a site rebuild the hashed Viewer chunk this page was built against no longer exists
+// ("Failed to fetch dynamically imported module"): reload once to pick up the current build.
+const CHUNK_RELOAD = 'gc-chunk-reload';
+const staleChunk = (message: string) => /dynamically imported module|Importing a module script failed|error loading dynamically/i.test(message);
+function loadViewer() {
+  return import('./Viewer').then(module => {
+    try { sessionStorage.removeItem(CHUNK_RELOAD); } catch { /* Storage can be unavailable. */ }
+    return module;
+  }).catch((reason: unknown) => {
+    let reloaded = true;
+    try { reloaded = sessionStorage.getItem(CHUNK_RELOAD) === '1'; sessionStorage.setItem(CHUNK_RELOAD, '1'); } catch { /* No storage: never loop. */ }
+    if (!reloaded && reason instanceof Error && staleChunk(reason.message)) {
+      window.location.reload();
+      return new Promise<never>(() => {});
+    }
+    throw reason;
+  });
+}
+const Viewer = lazy(loadViewer);
 
 class ViewerBoundary extends Component<{ children: ReactNode; onRetry: () => void }, { error: string | null }> {
   state: { error: string | null } = { error: null };
   static getDerivedStateFromError(error: Error) { return { error: error.message }; }
   componentDidCatch(error: Error, info: ErrorInfo) { console.error('Viewer failed', error, info.componentStack); }
   render() {
+    if (this.state.error && staleChunk(this.state.error)) return <div className="viewer-error" role="alert"><span className="eyebrow">WEB ACTUALIZADA</span><h3>Hay una versión nueva de la web.</h3><p>Recarga la página para abrir el modelo 3D; tu proyecto se conserva.</p><button onClick={() => window.location.reload()}>Recargar la página</button></div>;
     if (this.state.error) return <div className="viewer-error" role="alert"><span className="eyebrow">VISOR NO DISPONIBLE</span><h3>No se ha podido abrir el modelo.</h3><p>Comprueba que el archivo GLB está disponible y que tu navegador admite WebGL.</p><details><summary>Detalle del error</summary><p>{this.state.error}</p></details><button onClick={this.props.onRetry}>Reintentar</button></div>;
     return this.props.children;
   }
@@ -46,7 +65,7 @@ export default function App() {
     <a className="skip-link" href="#main">Ir al contenido</a>
     <header className="site-header"><a href="#" className="wordmark" aria-label="González Cardona Arquitectura, inicio">GC<span className="wordmark-dot">.</span><span className="wordmark-sub">GONZÁLEZ CARDONA<br />ARQUITECTURA</span></a><nav aria-label="Navegación principal"><a href="#new-project" onClick={()=>setNewRequest(n=>n+1)}>Nuevo proyecto</a>{manifest ? <><a href="#explore">Modelo 3D</a><a href="#renders">Renders</a></> : null}</nav><span className="edition">ESTUDIO DE VISUALIZACIÓN</span></header>
     <main id="main">
-      <section className="intro"><div className="intro-copy"><span className="eyebrow"><span className="status-dot" /> GONZÁLEZ CARDONA ARQUITECTURA</span><h1>Del plano,<br /><em>al espacio.</em></h1><p>Sube un plano en PDF, revisa la interpretación de la IA junto al original<br />y obtén renders y un modelo 3D generados con Blender.</p></div><div className="project-summary"><span className="eyebrow">CÓMO FUNCIONA</span><ol className="how-steps"><li><strong>01</strong> Plano PDF y, opcionalmente, materiales</li><li><strong>02</strong> Revisión lado a lado con el original</li><li><strong>03</strong> Renders y modelo 3D con Blender</li></ol><a href="#new-project" className="text-link" onClick={()=>setNewRequest(n=>n+1)}>Empezar un proyecto <span aria-hidden="true">↓</span></a></div></section>
+      <section className="intro"><div className="intro-copy"><span className="eyebrow"><span className="status-dot" /> GONZÁLEZ CARDONA ARQUITECTURA</span><h1>Del plano,<br /><em>al espacio.</em></h1><p>Sube un plano en PDF o DWG, revisa la interpretación de la IA junto al original<br />y obtén renders y un modelo 3D generados con Blender.</p></div><div className="project-summary"><span className="eyebrow">CÓMO FUNCIONA</span><ol className="how-steps"><li><strong>01</strong> Plano PDF o DWG y, opcionalmente, materiales</li><li><strong>02</strong> Revisión lado a lado con el original</li><li><strong>03</strong> Renders y modelo 3D con Blender</li></ol><a href="#new-project" className="text-link" onClick={()=>setNewRequest(n=>n+1)}>Empezar un proyecto <span aria-hidden="true">↓</span></a></div></section>
       <Workflow newRequest={newRequest} onResult={url=>{setManifestUrl(url);setAttempt(n=>n+1);setError('');}} />
       {error ? <section className="load-error" role="alert"><h2>Los renders aún no están disponibles.</h2><p>{error}</p><button onClick={() => setAttempt(n => n + 1)}>Volver a cargar</button></section> : !manifest || !manifestUrl ? null : <>
         <Gallery key={manifestUrl} manifest={manifest}/>
@@ -54,7 +73,7 @@ export default function App() {
           <ViewerBoundary key={`${manifestUrl}-${viewerAttempt}`} onRetry={() => setViewerAttempt(n => n + 1)}><Suspense fallback={<div className="viewer-placeholder" role="status">Preparando visor 3D…</div>}><Viewer manifest={manifest} attempt={viewerAttempt} /></Suspense></ViewerBoundary>
           <div className="viewer-footer"><span>Arrastra para orbitar · Rueda para acercar · Botón derecho para desplazar</span><a href={assetUrl(manifest.model_url)} download>Descargar modelo GLB <span aria-hidden="true">↗</span></a></div>
         </section>
-        <section className="source-section" id="source"><div><span className="eyebrow">03 / TRAZABILIDAD</span><h2>Del documento<br />al modelo.</h2></div><div className="source-description"><p>Muros y huecos proceden de los vectores del PDF y de su escala impresa; la IA los selecciona y clasifica. Renders y visor comparten la misma escena de Blender.</p><dl><div><dt>Control de calidad</dt><dd>{manifest.quality.passed ? 'Comprobación geométrica superada' : 'Revisión requerida'}</dd></div><div><dt>Origen</dt><dd>{manifest.conceptual ? 'Interpretación de IA aprobada en revisión' : manifest.synthetic ? 'Datos sintéticos de prueba' : 'Geometría revisada manualmente'}</dd></div><div><dt>Acabados</dt><dd>{manifest.finishes && Object.keys(manifest.finishes).length ? Object.values(manifest.finishes).map(f => f.name).join(' · ') : 'Por defecto del estudio'}</dd></div><div><dt>Huella del PDF</dt><dd className="hash" title={manifest.source_sha256}>{manifest.source_sha256 ? `${manifest.source_sha256.slice(0, 16)}…` : 'No disponible'}</dd></div></dl><p className="source-note">Visualización conceptual: las medidas se infieren del PDF y su escala; mobiliario y acabados son ilustrativos. No sustituye la documentación técnica del proyecto.</p></div></section>
+        <section className="source-section" id="source"><div><span className="eyebrow">03 / TRAZABILIDAD</span><h2>Del documento<br />al modelo.</h2></div><div className="source-description"><p>{manifest.source?.format === 'dwg' || manifest.source?.format === 'dxf' ? 'Muros, huecos y muebles se leen de las capas, bloques y textos del DWG; la IA solo resuelve las dudas que el dibujo no aclara.' : 'Muros y huecos proceden de los vectores del PDF y de su escala impresa; la IA los selecciona y clasifica.'} Renders y visor comparten la misma escena de Blender.</p><dl><div><dt>Control de calidad</dt><dd>{manifest.quality.passed ? 'Comprobación geométrica superada' : 'Revisión requerida'}</dd></div><div><dt>Origen</dt><dd>{manifest.conceptual ? 'Interpretación de IA aprobada en revisión' : manifest.synthetic ? 'Datos sintéticos de prueba' : 'Geometría revisada manualmente'}</dd></div><div><dt>Acabados</dt><dd>{manifest.finishes && Object.keys(manifest.finishes).length ? Object.values(manifest.finishes).map(f => f.name).join(' · ') : 'Por defecto del estudio'}</dd></div>{manifest.source?.converter ? <div><dt>Conversor</dt><dd>{manifest.source.converter}</dd></div> : null}<div><dt>Huella del {(manifest.source?.format ?? 'pdf').toUpperCase()}</dt><dd className="hash" title={manifest.source_sha256}>{manifest.source_sha256 ? `${manifest.source_sha256.slice(0, 16)}…` : 'No disponible'}</dd></div></dl><p className="source-note">Visualización conceptual: las medidas se infieren del {manifest.source?.format && manifest.source.format !== 'pdf' ? 'dibujo CAD' : 'PDF y su escala'}; mobiliario y acabados son ilustrativos. No sustituye la documentación técnica del proyecto.</p></div></section>
       </>}
     </main><footer className="site-footer"><span className="footer-brand">GC<span>.</span></span><p>González Cardona Arquitectura · Estudio de visualización</p><a href="#">Volver al inicio ↑</a></footer>
   </>;

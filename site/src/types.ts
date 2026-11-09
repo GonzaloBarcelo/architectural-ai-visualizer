@@ -13,6 +13,7 @@ export interface Manifest {
   quality: { passed: boolean };
   bounds?: { min: Point3; max: Point3 };
   source_sha256: string;
+  source?: { format: 'pdf' | 'dwg' | 'dxf'; sha256: string; converter?: string | null };
   has_roof?: boolean;
   cameras?: { interior?: { position: Point3; target: Point3 } };
 }

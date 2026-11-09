@@ -90,6 +90,17 @@ def source_matches(fmt, head):
     return re.match(r"\s*(999\s*\n.*\n\s*)?0\s*\r?\nSECTION", decoded) is not None
 
 
+class SiteFiles(StaticFiles):
+    """Hashed /assets files may be cached; HTML never is, so a reload after a site rebuild always
+    gets the index that references the current chunks (no stale "dynamically imported module")."""
+
+    async def get_response(self, path, scope):
+        response = await super().get_response(path, scope)
+        if response.headers.get("content-type", "").startswith("text/html"):
+            response.headers["Cache-Control"] = "no-cache"
+        return response
+
+
 class LocalBoundary:
     """Reject foreign Hosts/Origins and cap bodies before multipart parsing consumes them."""
 
@@ -862,7 +873,7 @@ def create_app(
     # Mounted last; /api routes never fall through to arbitrary filesystem paths.
     dist = Path(site_dir) / "dist"
     if dist.is_dir():
-        app.mount("/", StaticFiles(directory=dist, html=True), name="web")
+        app.mount("/", SiteFiles(directory=dist, html=True), name="web")
     return app
 
 

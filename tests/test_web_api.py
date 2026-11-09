@@ -407,3 +407,16 @@ def test_description_is_length_limited(client, pdf):
         data={"description": "x" * 1001},
     )
     assert response.status_code == 422
+
+
+def test_html_is_never_cached_but_assets_may_be(setup_paths):
+    data, site = setup_paths
+    (site / "dist/assets").mkdir()
+    (site / "dist/assets/Viewer-abc123.js").write_text("export default 1")
+    with TestClient(
+        create_app(data, site, pipeline_runner=successful_runner), base_url=BASE_URL
+    ) as c:
+        page = c.get("/")
+        assert page.status_code == 200 and page.headers["cache-control"] == "no-cache"
+        chunk = c.get("/assets/Viewer-abc123.js")
+        assert chunk.status_code == 200 and "cache-control" not in chunk.headers
