@@ -1,3 +1,18 @@
+# MVP verification — 2026-11-09
+
+| Check | Result |
+| --- | --- |
+| pytest | 74 passed (new: approve flow, description upload/limit, missing key, selection cache, tolerant furniture, room naming, viewpoint, finishes conversion/cache) |
+| Ruff check / format | clean |
+| Node GLB tests | 2 passed |
+| TypeScript + Vite | build passed |
+| Real PDF via HTTP | EA_01_MOD_1.pdf: interpretation 1.1 s (cache), approve → Blender 88.6 s, 518/518 QA, 3 renders + GLB returned 200 |
+| UI | Headless Chrome screenshots of upload, review and results inspected; headless minimum width is 500 px, so a true 390 px check was not possible |
+
+The material-description path was tested with mocked OpenAI responses and a hand-written palette rendered in Blender; no live finishes call was made.
+
+---
+
 # Real PDF conceptual run — 2026-11-09
 
 EA_01_MOD.pdf received two live OpenAI responses. First call used 5,284 tokens; second, vector-anchored call used 9,213 tokens. Both failed review: incorrect geometry, units and scale. They are NOT successful automatic reconstruction evidence.

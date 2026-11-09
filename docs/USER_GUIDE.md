@@ -1,3 +1,13 @@
+# Guía rápida — González Cardona (MVP)
+
+1. **Sube el plano.** Abre http://127.0.0.1:5174/, elige el PDF (una planta, escala impresa como 1:50) y, si quieres, describe materiales: *“suelo de roble natural, paredes blanco roto, muebles de nogal, sofá de lino gris”*. Pulsa **Interpretar plano**. El PDF se envía a OpenAI.
+2. **Revisa.** A la izquierda el plano original; a la derecha la interpretación de la IA (muros, puertas, ventanas, estancias y muebles). Comprueba estancias, materiales y supuestos. Puedes cambiar la descripción y pulsar **Actualizar materiales** sin volver a interpretar el plano. Si algo no encaja: **Volver a interpretar** o **Edición avanzada**.
+3. **Genera.** Pulsa **Aprobar y generar renders**. Blender crea renders exterior, interior y axonometría, y el modelo 3D (GLB), visibles debajo y descargables.
+
+Un mismo PDF no vuelve a consumir tokens: la interpretación queda en caché. `#project=<id>` en la URL abre un proyecto concreto. Requisitos del servidor: `OPENAI_API_KEY` (y opcionalmente `OPENAI_MODEL`, por defecto `gpt-5.4`).
+
+---
+
 # Envío automático y comparación
 
 Al subir un PDF, el servidor lo interpreta con OpenAI automáticamente si dispone de OPENAI_API_KEY. El aviso junto a la carga identifica el uso de la API. El PDF original aparece a la izquierda y la propuesta editable a la derecha; en pantallas estrechas se apilan. Los contornos son inferencias y requieren revisión.

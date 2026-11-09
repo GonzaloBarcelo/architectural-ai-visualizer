@@ -1,3 +1,31 @@
+# MVP González Cardona — 2026-11-09
+
+Three-step studio flow implemented: **1. Upload PDF (+ optional material description) → 2. Review the AI interpretation side by side with the original → 3. Blender renders + GLB.** The only user inputs are the PDF and the optional description (≤1000 characters). Branding: González Cardona Arquitectura.
+
+| Area | Status | Evidence / limitation |
+| --- | --- | --- |
+| AI plan interpretation | DONE | `grounded.py`: OpenAI (default `gpt-5.4`) selects wall/opening candidates extracted from PDF vectors and proposes furniture; geometry is never free-drawn by the model. Selections cached in `outputs/web-projects/ai-cache/selection-*.json` by PDF SHA-256 + model + prompt version; assembly re-runs with current code at zero token cost |
+| Robust assembly | DONE | Implausible furniture is omitted and recorded as an assumption instead of failing the whole interpretation; chairs may tuck under tables. Door gaps close room boundaries; rooms are named from the plan's own text labels |
+| Material description | DONE (mock-tested) | `materials.py`: separate text-only OpenAI call → typed `finishes` (walls, floor, doors, furniture wood, upholstery, ceramic) applied in Blender; cached by description. Without a key, default finishes are used and the review page says so. **Live call not executed in this session (no key in the agent shell)** |
+| Review step | DONE | Original PDF and AI overlay side by side (stacked on narrow screens), element counts, named rooms, finish swatches, assumptions, “Aprobar y generar renders”, re-interpret, editable description. Manual editor kept under “Edición avanzada” |
+| Approval | DONE | `POST /api/projects/{id}/approve` confirms the conceptual draft (status stays `inferred`), validates and queues Blender, revision-guarded |
+| Blender | DONE | Interior camera searches the most open view inside the largest room (`viewpoint.py`); wide doors (>1.3 m) render glazed; chairs at seat height; QA expected bounds account for openings spanning a whole host footprint (tolerance unchanged, 2 mm) |
+
+## Real blueprint result (blueprints_test/EA_01_MOD_1.pdf, CASA JPM 1:50)
+
+Through the HTTP API on an isolated server (port 5180): upload with description → interpretation in 1.1 s from the cached gpt-5.4 selection (26,943 tokens originally, 2 attempts; 0 new tokens) → 61 walls, 5 doors, 4 windows, 1 slab, 5 named rooms (Salón - Comedor - Cocina, Habitación 01/02, Baño 01/02), 19 furniture pieces, 0 validation issues → approve → Blender succeeded in 88.6 s, **518/518 QA checks**, exterior/interior/axonometric renders and a 155 KB GLB served. A separate direct run with a hand-written test palette verified that finishes reach the renders.
+
+Previously this same response failed: the furniture validator rejected chairs overlapping the dining table, and QA rejected door lintels. Both were fixed in code without relaxing tolerances.
+
+## Not verified / remaining
+
+- Only one real blueprint was available; other drawing conventions (scans, line-only walls, several scales or floors per PDF) remain unsupported by the grounded assembler and fall back to manual editing.
+- Live OpenAI calls (new PDFs, finishes) were not executed in this session; the user's local server has the key.
+- Heights (2.70 m walls, 2.10 m doors, 0.90/1.20 m windows) are assumptions listed in the review. Furniture/finishes are illustrative.
+- Python 74 passed, Ruff clean, Node 2 passed, TypeScript/Vite build passed. No deployment.
+
+---
+
 # Automatic interpretation and source comparison
 
 New uploads automatically request OpenAI interpretation when the local server has a key. A private cache keyed by PDF digest, model and prompt version avoids repeated API calls; the original AI proposal and token usage are retained alongside the editable draft. The web compares the original PDF and proposed geometry side by side (stacked on narrow screens).

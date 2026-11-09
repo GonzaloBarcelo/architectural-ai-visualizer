@@ -1,4 +1,6 @@
-# Architectural AI Visualizer
+# Architectural AI Visualizer — González Cardona
+
+**MVP:** sube un plano PDF (+ descripción opcional de materiales) → revisa la interpretación de la IA junto al original → Blender genera renders y modelo 3D. Ver [guía rápida](docs/USER_GUIDE.md) y [estado](docs/IMPLEMENTATION_STATUS.md). Requiere `OPENAI_API_KEY` en el entorno del servidor.
 
 Pipeline local y reproducible: **PDF → geometría métrica → Blender → QA → renders → GLB → visor web**.
 
