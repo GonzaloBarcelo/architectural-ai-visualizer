@@ -17,7 +17,7 @@ from types import SimpleNamespace
 from uuid import uuid4
 
 import uvicorn
-from fastapi import FastAPI, HTTPException, UploadFile
+from fastapi import FastAPI, Form, HTTPException, UploadFile
 from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
@@ -25,7 +25,8 @@ from pydantic import BaseModel, Field
 from pipelines.common import ROOT, write_json
 from pipelines.pdf.extract import extract
 from pipelines.run import run
-from pipelines.web.ai import propose
+from pipelines.web.grounded import propose
+from pipelines.web.materials import MAX_DESCRIPTION, propose_finishes
 from pipelines.web.review import Draft, draft_from_extraction, validate_draft
 
 log = logging.getLogger(__name__)
@@ -45,6 +46,10 @@ class Revision(BaseModel):
 
 class SaveDraft(Revision):
     draft: Draft
+
+
+class Description(Revision):
+    description: str = Field(default="", max_length=MAX_DESCRIPTION)
 
 
 class LocalBoundary:
@@ -185,14 +190,8 @@ class Projects:
                 issues=issues,
                 error=None,
             )
-            if os.getenv("OPENAI_API_KEY"):
-                self.update(ident, status="running", stage="interpreting")
-                self.interpret(ident)
-            else:
-                self.update(
-                    ident,
-                    error="La interpretación automática requiere OPENAI_API_KEY en el servidor.",
-                )
+            self.update(ident, status="running", stage="interpreting")
+            self.interpret(ident)
         except Exception as exc:
             log.exception("Local project operation failed")
             self.update(ident, status="failed", stage="extraction_failed", error=str(exc)[:3000])
@@ -200,43 +199,90 @@ class Projects:
     def interpret(self, ident):
         try:
             raw = self.raw(ident)
-            import hashlib
-
-            cache_key = hashlib.sha256(
-                (
-                    raw["source"]["sha256"] + os.getenv("OPENAI_MODEL", "gpt-4.1") + ":proposal-v2"
-                ).encode()
-            ).hexdigest()
-            cache_path = self.root / "ai-cache" / (cache_key + ".json")
-            if cache_path.is_file():
-                cached = json.loads(cache_path.read_text())
-                draft, usage = cached["draft"], {**cached["usage"], "cache_hit": True}
-            else:
-                draft, usage = propose(self.folder(ident) / "source.pdf", raw)
-                write_json(cache_path, {"draft": draft, "usage": usage})
+            cache = self.root / "ai-cache"
+            draft, usage = propose(self.folder(ident) / "source.pdf", raw, cache_dir=cache)
+            draft["title"] = Path(self.get(ident)["filename"]).stem[:200] or draft["title"]
+            write_json(self.folder(ident) / "ai-interpretation.json", draft)
             with self.lock:
                 state = self.get(ident)
-                _, issues = validate_draft(draft, self.raw(ident), ident)
                 state.update(
                     draft=draft,
-                    ai_usage=usage,
+                    ai_usage={"plan": usage},
                     ai_interpretation=draft,
                     revision=state["revision"] + 1,
-                    status="review",
-                    stage="review",
-                    issues=issues,
                     error=None,
+                    ai_error_type=None,
                 )
                 state.pop("manifest_url", None)
                 self.save(state)
-        except Exception:
+            if (self.get(ident).get("description") or "").strip():
+                self.update(ident, stage="materials")
+            self.apply_finishes(ident)
+        except Exception as exc:
             log.exception("AI interpretation failed")
+            missing_key = "OPENAI_API_KEY" in str(exc)
             self.update(
                 ident,
                 status="review",
                 stage="review",
-                error="No se pudo interpretar con OpenAI. Comprueba la clave, cuota y acceso al modelo; el borrador anterior se conserva.",
+                error=(
+                    "La interpretación automática necesita OPENAI_API_KEY en el servidor."
+                    if missing_key
+                    else "No se pudo interpretar el plano con OpenAI ("
+                    + type(exc).__name__
+                    + ": "
+                    + str(exc)[:400]
+                    + "). Puedes reintentarlo o usar la edición manual."
+                ),
+                ai_error_type=type(exc).__name__,
             )
+
+    def apply_finishes(self, ident):
+        """Turn the client's optional description into render finishes on the current draft."""
+        state = self.get(ident)
+        description = state.get("description") or ""
+        notes, usage, error = [], None, None
+        try:
+            finishes, notes, usage = propose_finishes(description, self.root / "ai-cache")
+        except Exception as exc:
+            log.exception("Finish proposal failed")
+            finishes = {}
+            error = "No se pudieron interpretar los materiales; se usan acabados por defecto."
+            if "OPENAI_API_KEY" in str(exc):
+                error = "Los materiales necesitan OPENAI_API_KEY; se usan acabados por defecto."
+        with self.lock:
+            state = self.get(ident)
+            draft = state.get("draft")
+            if draft:
+                keep = [a for a in draft.get("assumptions", []) if not a.startswith("Acabados")]
+                summary = (
+                    ["Acabados ilustrativos según la descripción del cliente: " + description]
+                    if finishes
+                    else ["Acabados por defecto del estudio (sin descripción de materiales)."]
+                )
+                draft.update(
+                    finishes=finishes,
+                    assumptions=(keep + summary + [f"Acabados — {n}" for n in notes])[:100],
+                )
+                if error:
+                    draft["assumptions"].append("Acabados: " + error)
+                state["draft"] = draft
+                state["revision"] += 1
+            state.update(status="review", stage="review", finishes_error=error)
+            state.setdefault("ai_usage", {})
+            if isinstance(state["ai_usage"], dict):
+                state["ai_usage"]["finishes"] = usage
+            _, issues = validate_draft(draft, self.raw(ident), ident) if draft else (None, [])
+            state["issues"] = issues
+            state.pop("manifest_url", None)
+            self.save(state)
+
+    def finishes_job(self, ident):
+        try:
+            self.apply_finishes(ident)
+        except Exception as exc:
+            log.exception("Finish update failed")
+            self.update(ident, status="review", stage="review", error=str(exc)[:500])
 
     def generate(self, ident, geometry, revision):
         folder = self.folder(ident)
@@ -315,10 +361,12 @@ def create_app(
         }
 
     @app.post("/api/projects", status_code=202)
-    async def upload(file: UploadFile):
+    async def upload(file: UploadFile, description: str = Form(default="")):
         filename = Path((file.filename or "plano.pdf").replace("\\", "/")).name[:200]
         if not filename.lower().endswith(".pdf"):
             raise HTTPException(415, "Selecciona un archivo PDF.")
+        if len(description) > MAX_DESCRIPTION:
+            raise HTTPException(422, f"La descripción admite hasta {MAX_DESCRIPTION} caracteres.")
         ident = uuid4().hex
         folder = projects.folder(ident)
         folder.mkdir()
@@ -345,6 +393,7 @@ def create_app(
                 {
                     "id": ident,
                     "filename": filename,
+                    "description": description.strip(),
                     "status": "extracting",
                     "stage": "extracting",
                     "revision": 0,
@@ -387,11 +436,6 @@ def create_app(
         with projects.lock:
             state = projects.get(ident)
             projects.check_revision(state, body.revision)
-            if not os.getenv("OPENAI_API_KEY"):
-                raise HTTPException(
-                    503,
-                    "Configura OPENAI_API_KEY en el servidor local y reinícialo. No pegues la clave en el chat.",
-                )
             if not state.get("pages"):
                 raise HTTPException(409, "Primero debe completarse la extracción del PDF.")
             if (projects.folder(ident) / "source.pdf").stat().st_size > 20 * 1024**2:
@@ -411,6 +455,60 @@ def create_app(
             _, issues = validate_draft(state.get("draft"), projects.raw(ident), ident)
             state["issues"] = issues
             return projects.save(state)
+
+    @app.put("/api/projects/{ident}/description", status_code=202)
+    def update_description(ident: str, body: Description):
+        with projects.lock:
+            state = projects.get(ident)
+            projects.check_revision(state, body.revision)
+            if not state.get("draft"):
+                raise HTTPException(409, "Primero debe completarse la extracción del PDF.")
+            state.update(
+                description=body.description.strip(),
+                status="running",
+                stage="materials",
+                error=None,
+            )
+            projects.save(state)
+            projects.executor.submit(projects.finishes_job, ident)
+            return state
+
+    @app.post("/api/projects/{ident}/approve", status_code=202)
+    def approve(ident: str, body: Revision):
+        """Explicit user approval of the AI interpretation, then Blender generation."""
+        with projects.lock:
+            state = projects.get(ident)
+            projects.check_revision(state, body.revision)
+            draft = state.get("draft")
+            if not draft or not draft.get("conceptual"):
+                raise HTTPException(
+                    409, "No hay una interpretación de la IA que aprobar; usa la edición manual."
+                )
+            draft["calibration"]["confirmed"] = True
+            draft["floor"]["confirmed"] = True
+            for entity in draft["entities"]:
+                entity["confirmed"] = True
+            draft["complete"] = True
+            geometry, issues = validate_draft(draft, projects.raw(ident), ident)
+            if issues:
+                state["issues"] = issues
+                projects.save(state)
+                raise HTTPException(
+                    422, {"message": "La interpretación no es coherente.", "issues": issues}
+                )
+            revision = state["revision"] + 1
+            state.update(
+                draft=draft,
+                revision=revision,
+                status="queued",
+                stage="queued",
+                error=None,
+                issues=[],
+            )
+            state.pop("manifest_url", None)
+            projects.save(state)
+            projects.executor.submit(projects.generate, ident, geometry, revision)
+            return state
 
     @app.post("/api/projects/{ident}/generate", status_code=202)
     def generate(ident: str, body: Revision):
@@ -480,18 +578,41 @@ def create_app(
     return app
 
 
+def configured_app():
+    return create_app(
+        Path(os.environ["AAV_DATA_DIR"]),
+        Path(os.environ["AAV_SITE_ROOT"]),
+        port=int(os.environ["AAV_PORT"]),
+    )
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--port", type=int, default=5174)
     parser.add_argument("--data-dir", type=Path, default=ROOT / "outputs/web-projects")
     parser.add_argument("--site-root", type=Path, default=ROOT / "site")
+    parser.add_argument(
+        "--reload",
+        action="store_true",
+        help="Local development reload; retains API key in parent process",
+    )
     args = parser.parse_args()
     if not 1024 <= args.port <= 65535:
         parser.error("Use a local port from 1024 to 65535.")
     if not (args.site_root / "dist/index.html").is_file():
         parser.error("Build the web app first: npm --prefix site run build")
+    os.environ.update(
+        AAV_DATA_DIR=str(args.data_dir.resolve()),
+        AAV_SITE_ROOT=str(args.site_root.resolve()),
+        AAV_PORT=str(args.port),
+    )
     uvicorn.run(
-        create_app(args.data_dir, args.site_root, port=args.port),
+        "pipelines.web.server:configured_app"
+        if args.reload
+        else create_app(args.data_dir, args.site_root, port=args.port),
+        factory=args.reload,
+        reload=args.reload,
+        reload_dirs=[str(ROOT / "pipelines")] if args.reload else None,
         host="127.0.0.1",
         port=args.port,
         workers=1,

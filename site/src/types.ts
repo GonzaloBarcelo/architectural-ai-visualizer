@@ -5,6 +5,7 @@ export interface Manifest {
   synthetic: boolean;
   conceptual?: boolean;
   assumptions?: string[];
+  finishes?: Record<string, { name: string; color: [number, number, number]; roughness: number }>;
   units: string;
   model_url: string;
   renders: { id: string; label: string; url: string }[];

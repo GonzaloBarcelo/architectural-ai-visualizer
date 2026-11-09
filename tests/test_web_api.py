@@ -306,30 +306,98 @@ def test_interrupted_job_is_recoverable_on_restart(setup_paths, pdf):
         assert wait_project(c, project["id"], ("succeeded",))["status"] == "succeeded"
 
 
-def test_upload_auto_interprets_and_reuses_pdf_cache(client, pdf, monkeypatch):
+def ai_draft(raw):
     from pipelines.web.review import draft_from_extraction
 
-    calls = []
+    draft = draft_from_extraction(raw, "test", "Concept")
+    draft.update(conceptual=True, assumptions=["Test assumption"])
+    return draft
 
-    def fake_propose(path, raw):
-        calls.append(path)
-        draft = draft_from_extraction(raw, "test", "Concept")
-        draft.update(conceptual=True, assumptions=["Test assumption"])
-        return draft, {"model": "test", "usage": {"total_tokens": 10}}
 
-    monkeypatch.setenv("OPENAI_API_KEY", "test-only-not-real")
+def test_upload_with_description_interprets_applies_finishes_and_approves(
+    tmp_path, pdf, monkeypatch
+):
+    calls, finish_calls = [], []
+
+    def fake_propose(path, raw, cache_dir=None):
+        calls.append(cache_dir)
+        return ai_draft(raw), {"model": "test", "usage": {"total_tokens": 10}}
+
+    def fake_finishes(description, cache_dir):
+        finish_calls.append(description)
+        finish = {"name": "Roble", "color": (0.3, 0.2, 0.1), "roughness": 0.5}
+        return {"floor": finish}, ["Textura no modelada"], {"total_tokens": 3}
+
     monkeypatch.setattr("pipelines.web.server.propose", fake_propose)
-    first = upload(client, pdf)
-    # Ingest and interpretation share the background worker; wait for AI result.
-    deadline = time.monotonic() + 5
-    while "ai_usage" not in first and time.monotonic() < deadline:
-        time.sleep(0.01)
-        first = client.get(f"/api/projects/{first['id']}").json()
-    assert first["draft"]["conceptual"]
-    assert first["ai_interpretation"]["assumptions"] == ["Test assumption"]
-    second = upload(client, pdf)
-    while "ai_usage" not in second and time.monotonic() < deadline:
-        time.sleep(0.01)
-        second = client.get(f"/api/projects/{second['id']}").json()
-    assert second["ai_usage"]["cache_hit"]
-    assert len(calls) == 1
+    monkeypatch.setattr("pipelines.web.server.propose_finishes", fake_finishes)
+    with TestClient(
+        create_app(tmp_path / "projects", tmp_path / "site", successful_runner), base_url=BASE_URL
+    ) as client:
+        response = client.post(
+            "/api/projects",
+            files={"file": ("plan.pdf", pdf.read_bytes(), "application/pdf")},
+            data={"description": "  Suelo de roble natural  "},
+        )
+        assert response.status_code == 202, response.text
+        project = wait_project(client, response.json()["id"], ("review", "failed"))
+        deadline = time.monotonic() + 5
+        while project["stage"] != "review" or "finishes" not in (project.get("ai_usage") or {}):
+            assert time.monotonic() < deadline, project
+            time.sleep(0.01)
+            project = client.get(f"/api/projects/{project['id']}").json()
+        assert project["description"] == "Suelo de roble natural"
+        assert finish_calls == ["Suelo de roble natural"]
+        assert calls and calls[0].name == "ai-cache"
+        assert project["draft"]["finishes"]["floor"]["name"] == "Roble"
+        assert project["ai_interpretation"]["assumptions"] == ["Test assumption"]
+        assert any("roble" in a for a in project["draft"]["assumptions"])
+        stale = client.post(
+            f"/api/projects/{project['id']}/approve", json={"revision": project["revision"] - 1}
+        )
+        assert stale.status_code == 409
+        approved = client.post(
+            f"/api/projects/{project['id']}/approve", json={"revision": project["revision"]}
+        )
+        assert approved.status_code == 202, approved.text
+        done = wait_project(client, project["id"], ("succeeded", "failed"))
+        assert done["status"] == "succeeded", done
+        assert done["draft"]["complete"] and all(e["confirmed"] for e in done["draft"]["entities"])
+        assert client.get(done["manifest_url"]).status_code == 200
+
+
+def test_approve_requires_ai_interpretation_and_coherent_geometry(tmp_path, pdf, monkeypatch):
+    monkeypatch.setattr(
+        "pipelines.web.server.propose", lambda *a, **k: (_ for _ in ()).throw(ValueError("x"))
+    )
+    with TestClient(
+        create_app(tmp_path / "projects", tmp_path / "site", successful_runner), base_url=BASE_URL
+    ) as client:
+        project = upload(client, pdf)
+        assert "OpenAI" in project["error"]
+        response = client.post(
+            f"/api/projects/{project['id']}/approve", json={"revision": project["revision"]}
+        )
+        assert response.status_code == 409
+
+
+def test_missing_key_reports_actionable_error(tmp_path, pdf, monkeypatch):
+    monkeypatch.delenv("OPENAI_API_KEY", raising=False)
+    monkeypatch.setattr(
+        "pipelines.web.server.propose",
+        lambda *a, **k: (_ for _ in ()).throw(ValueError("OPENAI_API_KEY missing")),
+    )
+    with TestClient(
+        create_app(tmp_path / "projects", tmp_path / "site", successful_runner), base_url=BASE_URL
+    ) as client:
+        project = upload(client, pdf)
+        assert project["status"] == "review"
+        assert "OPENAI_API_KEY" in project["error"]
+
+
+def test_description_is_length_limited(client, pdf):
+    response = client.post(
+        "/api/projects",
+        files={"file": ("plan.pdf", pdf.read_bytes(), "application/pdf")},
+        data={"description": "x" * 1001},
+    )
+    assert response.status_code == 422
