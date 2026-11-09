@@ -43,7 +43,7 @@ const roleLabels: Record<string, string> = { wall: 'Muros', door: 'Puertas', win
 const readingLabels: Record<ReadingStatus, string> = { verified: 'Leído del DWG', inferred: 'Resuelto por la IA', user: 'Indicado por ti', missing: 'Pendiente' };
 const money = (v: number) => '$' + v.toFixed(v < 0.1 ? 3 : 2);
 // Typical durations observed with gpt-5.4 at high reasoning effort; shown so a long wait never looks like a hang.
-const expected: Record<string, string> = { reading_dwg: 'unos segundos', resolving: 'unos segundos', extracting: 'unos segundos', interpreting: '15–20 minutos (3 llamadas a la IA de 4–8 min cada una)', materials: 'menos de un minuto', queued: 'empieza en cuanto termine el trabajo anterior', rendering: '5–8 minutos', enhancing: '2–4 minutos (hasta 3 imágenes a la vez, 1–2 min cada una)' };
+const expected: Record<string, string> = { reading_dwg: 'unos segundos', resolving: 'unos segundos', extracting: 'unos segundos', interpreting: '15–20 minutos (3 llamadas a la IA de 4–8 min cada una)', materials: 'menos de un minuto', queued: 'empieza en cuanto termine el trabajo anterior', rendering: '5–8 minutos', enhancing: '1,5–2,5 minutos (hasta 3 imágenes a la vez; 30 s por imagen, unos 60 s si necesita el reintento estricto)' };
 const LOCATION_FALLBACK = 'residencia mediterránea en España';
 const since = (iso: string | undefined, now: number) => iso ? Math.max(0, Math.floor((now - Date.parse(iso)) / 1000)) : null;
 const clock = (seconds: number | null) => seconds === null ? '—' : `${Math.floor(seconds / 60)}:${String(seconds % 60).padStart(2, '0')}`;
