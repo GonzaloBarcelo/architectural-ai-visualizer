@@ -888,7 +888,9 @@ def propose(
     payload = doubts(reading)
     reading_seconds = round(time.monotonic() - started, 2)
     model = os.getenv("OPENAI_MODEL", DEFAULT_MODEL)
-    use_image = image if image is not None else os.getenv("AAV_DWG_IMAGE", "0") == "1"
+    # The labelled plan image is on by default: in the live comparison (one drawing) it fixed the
+    # balcony/gallery openings and kept identical blocks consistent for ~1.2k more input tokens.
+    use_image = image if image is not None else os.getenv("AAV_DWG_IMAGE", "1") == "1"
     ai = stored_ai or {
         "model": model,
         "called": False,

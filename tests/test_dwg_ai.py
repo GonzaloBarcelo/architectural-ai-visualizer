@@ -85,6 +85,7 @@ def test_one_medium_call_answers_by_id_and_is_inferred(tmp_path):
         cache_dir=tmp_path / "cache",
         audit_dir=tmp_path / "audit",
         client=mock_client({"Resolution": resolution(item)}, calls),
+        image=False,
     )
     assert len(calls) == 1
     call = calls[0]
@@ -172,7 +173,7 @@ def test_user_answers_resolve_pending_items_without_a_call(tmp_path):
     assert any(i["status"] == "user" for i in summary["items"])
 
 
-def test_optional_labelled_image_is_attached_when_enabled(tmp_path):
+def test_labelled_image_is_attached_by_default(tmp_path):
     path = build(tmp_path / "flat.dxf", unknown=True)
     item = unknown_id(path)
     calls = []
@@ -182,7 +183,6 @@ def test_optional_labelled_image_is_attached_when_enabled(tmp_path):
         cache_dir=tmp_path / "cache",
         audit_dir=tmp_path / "audit",
         client=mock_client({"Resolution": resolution(item)}, calls),
-        image=True,
     )
     parts = calls[0]["input"][0]["content"]
     assert [p["type"] for p in parts] == ["input_text", "input_image"]
