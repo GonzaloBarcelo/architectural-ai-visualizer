@@ -22,9 +22,12 @@ from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 
-from pipelines.common import ROOT, write_json
+from pipelines.cad.convert import convert
+from pipelines.cad.convert import label as converter_label
+from pipelines.common import ROOT, sha256, write_json
 from pipelines.pdf.extract import extract
 from pipelines.run import run
+from pipelines.web import dwg
 from pipelines.web.grounded import propose
 from pipelines.web.materials import MAX_DESCRIPTION, propose_finishes
 from pipelines.web.review import Draft, draft_from_extraction, validate_draft
@@ -34,6 +37,10 @@ log = logging.getLogger(__name__)
 MAX_UPLOAD = 50 * 1024**2
 BUSY = {"queued", "running", "extracting"}
 AI_STEPS = ("selection", "furniture", "review")
+DWG_STEPS = ("reading", "doubts")
+DWG_STEP_LABELS = ["Lectura del DWG", "Consulta de dudas a la IA"]
+# Accepted sources: extension → format. Content is checked too (magic bytes / DXF header).
+SOURCES = {".pdf": "pdf", ".dwg": "dwg", ".dxf": "dxf"}
 ID_PATTERN = re.compile(r"^[a-f0-9]{32}$")
 
 
@@ -51,6 +58,31 @@ class SaveDraft(Revision):
 
 class Description(Revision):
     description: str = Field(default="", max_length=MAX_DESCRIPTION)
+
+
+class PlanChoice(Revision):
+    plan: int = Field(ge=0, le=50)
+
+
+class CadAnswers(Revision):
+    # Item id → answer fields (same shape as the AI answers, e.g. {"kind": ..., "front": ...}).
+    answers: dict[str, dict] = Field(default_factory=dict, max_length=300)
+
+
+def source_matches(fmt, head):
+    """Content check of the first upload chunk for the declared format."""
+    if fmt == "pdf":
+        return head.startswith(b"%PDF-")
+    if fmt == "dwg":
+        return re.fullmatch(rb"AC10\d\d", head[:6]) is not None
+    text = head[:4096]
+    if text.startswith(b"AutoCAD Binary DXF"):
+        return True
+    try:
+        decoded = text.decode("latin-1")
+    except UnicodeDecodeError:
+        return False
+    return re.match(r"\s*(999\s*\n.*\n\s*)?0\s*\r?\nSECTION", decoded) is not None
 
 
 class LocalBoundary:
@@ -152,6 +184,8 @@ class Projects:
             raise HTTPException(409, "El proyecto está procesándose. Espera a que termine.")
 
     def ingest(self, ident):
+        if self.get(ident).get("source_format", "pdf") != "pdf":
+            return self.ingest_cad(ident)
         try:
             self.update(ident, status="extracting", stage="extracting")
             folder = self.folder(ident)
@@ -201,7 +235,163 @@ class Projects:
             log.exception("Local project operation failed")
             self.update(ident, status="failed", stage="extraction_failed", error=str(exc)[:3000])
 
+    def ingest_cad(self, ident):
+        """Convert a DWG locally, find its drawn plans and, with a single plan, read it."""
+        try:
+            self.update(ident, status="extracting", stage="reading_dwg")
+            state = self.get(ident)
+            folder = self.folder(ident)
+            evidence = folder / "evidence"
+            evidence.mkdir(exist_ok=True)
+            path = folder / state["source_file"]
+            converter = None
+            if state["source_format"] == "dwg":
+                dxf, converter = convert(path, evidence)
+            else:
+                dxf = path
+            source = {
+                "filename": state["filename"][:200],
+                "sha256": sha256(path),
+                "page_count": 1,
+                "format": state["source_format"],
+                "converter": converter_label(converter),
+            }
+            write_json(
+                evidence / "cad-source.json",
+                {**source, "dxf": dxf.name, "dxf_sha256": sha256(dxf)},
+            )
+            png, plans = dwg.overview(dxf)
+            (evidence / "overview.png").write_bytes(png)
+            self.update(
+                ident, dxf_file=str(dxf.relative_to(folder)), cad_source=source, plans=plans
+            )
+            if len(plans) > 1:
+                self.update(ident, status="review", stage="choose_plan", error=None)
+                return
+            self.prepare_plan(ident, 0)
+        except Exception as exc:
+            log.exception("DWG reading failed")
+            self.update(ident, status="failed", stage="extraction_failed", error=str(exc)[:3000])
+
+    def prepare_plan(self, ident, index):
+        """Render the chosen plan as the review sheet, then read and interpret it."""
+        folder = self.folder(ident)
+        state = self.get(ident)
+        png, (width, height), _, _ = dwg.plan_sheet(folder / state["dxf_file"], index)
+        (folder / "evidence" / "page-1.png").write_bytes(png)
+        write_json(
+            folder / "evidence/extraction.json",
+            {
+                "source": state["cad_source"],
+                "cad": {"plan_index": index, "dxf": state["dxf_file"]},
+                "pages": [
+                    {
+                        "page": 1,
+                        "size_points": [width, height],
+                        "type": state["source_format"],
+                        "text": "",
+                        "drawings": [],
+                        "text_blocks": [],
+                    }
+                ],
+            },
+        )
+        page = {
+            "page": 1,
+            "width": width,
+            "height": height,
+            "image_url": f"/api/projects/{ident}/files/page-1.png",
+            "type": state["source_format"],
+            "dimensions": [],
+            "candidates": [],
+        }
+        draft = Draft(title=Path(state["filename"]).stem[:200] or "Proyecto").model_dump()
+        self.update(
+            ident,
+            pages=[page],
+            plan_index=index,
+            draft=draft,
+            issues=[],
+            status="running",
+            stage="interpreting",
+            error=None,
+        )
+        self.interpret_cad(ident)
+
+    def interpret_cad(self, ident, call_ai=True):
+        """Deterministic DWG reading plus at most one AI call for its doubts."""
+        try:
+            state = self.get(ident)
+            folder = self.folder(ident)
+            attempts = {}
+
+            def progress(step):
+                attempts[step] = attempts.get(step, 0) + 1
+                index = DWG_STEPS.index(step) + 1
+                log.info("Project %s: DWG step %s/2 (%s)", ident, index, step)
+                self.update(
+                    ident,
+                    activity={
+                        "step": index,
+                        "total": len(DWG_STEPS),
+                        "label": step,
+                        "labels": DWG_STEP_LABELS,
+                        "started_at": timestamp(),
+                        "attempt": attempts[step],
+                    },
+                )
+
+            stored = None
+            if not call_ai and (folder / "cad-ai.json").is_file():
+                stored = json.loads((folder / "cad-ai.json").read_text())
+            draft, summary, ai = dwg.propose(
+                folder / state["dxf_file"],
+                state["cad_source"],
+                state.get("plan_index", 0),
+                cache_dir=self.root / "ai-cache",
+                audit_dir=folder / "ai-audit",
+                progress=progress,
+                user_answers=state.get("cad_answers"),
+                stored_ai=stored,
+                call_ai=call_ai,
+            )
+            draft["title"] = Path(state["filename"]).stem[:200] or draft["title"]
+            write_json(folder / "cad-ai.json", ai)
+            write_json(folder / "cad-reading.json", summary)
+            write_json(folder / "ai-interpretation.json", draft)
+            with self.lock:
+                state = self.get(ident)
+                state.update(
+                    draft=draft,
+                    cad=summary,
+                    ai_usage={"plan": summary["ai"]},
+                    ai_interpretation=draft,
+                    revision=state["revision"] + 1,
+                    error=None,
+                    ai_error_type=None,
+                )
+                state.pop("manifest_url", None)
+                self.save(state)
+            if (self.get(ident).get("description") or "").strip():
+                self.update(ident, stage="materials")
+            self.apply_finishes(ident)
+        except Exception as exc:
+            log.exception("DWG interpretation failed")
+            self.update(
+                ident,
+                status="review",
+                stage="review",
+                error="No se pudo leer el plano DWG/DXF ("
+                + type(exc).__name__
+                + ": "
+                + str(exc)[:600]
+                + ").",
+                ai_error_type=type(exc).__name__,
+            )
+
     def interpret(self, ident):
+        if self.get(ident).get("source_format", "pdf") != "pdf":
+            return self.interpret_cad(ident)
         try:
             raw = self.raw(ident)
             cache = self.root / "ai-cache"
@@ -317,7 +507,7 @@ class Projects:
             approved = folder / f"approved-{revision}.json"
             write_json(approved, geometry.model_dump())
             args = SimpleNamespace(
-                input=folder / "source.pdf",
+                input=folder / self.get(ident).get("source_file", "source.pdf"),
                 output=output,
                 demo=False,
                 geometry=approved,
@@ -382,7 +572,7 @@ def create_app(
     def listing():
         with projects.lock:
             states = [json.loads(p.read_text()) for p in projects.root.glob("*/project.json")]
-        keys = ["id", "filename", "status", "stage", "error", "updated_at"]
+        keys = ["id", "filename", "status", "stage", "error", "updated_at", "source_format"]
         return {
             "projects": [
                 {k: s.get(k) for k in keys}
@@ -393,27 +583,33 @@ def create_app(
     @app.post("/api/projects", status_code=202)
     async def upload(file: UploadFile, description: str = Form(default="")):
         filename = Path((file.filename or "plano.pdf").replace("\\", "/")).name[:200]
-        if not filename.lower().endswith(".pdf"):
-            raise HTTPException(415, "Selecciona un archivo PDF.")
+        suffix = Path(filename).suffix.lower()
+        if suffix not in SOURCES:
+            raise HTTPException(415, "Selecciona un plano en PDF, DWG o DXF.")
+        fmt = SOURCES[suffix]
+        stored = f"source{suffix}"
         if len(description) > MAX_DESCRIPTION:
             raise HTTPException(422, f"La descripción admite hasta {MAX_DESCRIPTION} caracteres.")
         ident = uuid4().hex
         folder = projects.folder(ident)
         folder.mkdir()
         size = 0
+        label = {"pdf": "El PDF", "dwg": "El DWG", "dxf": "El DXF"}[fmt]
         try:
-            with (folder / "source.pdf").open("wb") as stream:
+            with (folder / stored).open("wb") as stream:
                 while chunk := await file.read(1024 * 1024):
-                    if size == 0 and not chunk.startswith(b"%PDF-"):
-                        raise HTTPException(415, "El contenido no es un documento PDF válido.")
+                    if size == 0 and not source_matches(fmt, chunk):
+                        raise HTTPException(
+                            415, f"El contenido no es un archivo {fmt.upper()} válido."
+                        )
                     size += len(chunk)
                     if size > MAX_UPLOAD:
-                        raise HTTPException(413, "El PDF supera el límite de 50 MiB.")
+                        raise HTTPException(413, f"{label} supera el límite de 50 MiB.")
                     stream.write(chunk)
             if size == 0:
-                raise HTTPException(415, "El PDF está vacío.")
+                raise HTTPException(415, f"{label} está vacío.")
         except Exception:
-            (folder / "source.pdf").unlink(missing_ok=True)
+            (folder / stored).unlink(missing_ok=True)
             folder.rmdir()
             raise
         finally:
@@ -424,8 +620,10 @@ def create_app(
                     "id": ident,
                     "filename": filename,
                     "description": description.strip(),
+                    "source_format": fmt,
+                    "source_file": stored,
                     "status": "extracting",
-                    "stage": "extracting",
+                    "stage": "extracting" if fmt == "pdf" else "reading_dwg",
                     "revision": 0,
                     "pages": [],
                     "draft": None,
@@ -468,11 +666,54 @@ def create_app(
             projects.check_revision(state, body.revision)
             if not state.get("pages"):
                 raise HTTPException(409, "Primero debe completarse la extracción del PDF.")
-            if (projects.folder(ident) / "source.pdf").stat().st_size > 20 * 1024**2:
+            pdf = state.get("source_format", "pdf") == "pdf"
+            if pdf and (projects.folder(ident) / "source.pdf").stat().st_size > 20 * 1024**2:
                 raise HTTPException(413, "OpenAI admite aquí PDF de hasta 20 MiB.")
             state.update(status="running", stage="interpreting", error=None)
             projects.save(state)
             projects.executor.submit(projects.interpret, ident)
+            return state
+
+    @app.post("/api/projects/{ident}/plan", status_code=202)
+    def choose_plan(ident: str, body: PlanChoice):
+        """DWG with several drawn plans: the user picks the one to model."""
+        with projects.lock:
+            state = projects.get(ident)
+            projects.check_revision(state, body.revision)
+            if state.get("source_format", "pdf") == "pdf" or not state.get("plans"):
+                raise HTTPException(409, "Este proyecto no tiene plantas DWG que elegir.")
+            if body.plan >= len(state["plans"]):
+                raise HTTPException(422, "La planta elegida no existe en el dibujo.")
+            state.update(status="extracting", stage="reading_dwg", error=None, cad_answers={})
+            projects.save(state)
+            projects.executor.submit(projects.prepare_plan, ident, body.plan)
+            return state
+
+    @app.put("/api/projects/{ident}/answers", status_code=202)
+    def answer_doubts(ident: str, body: CadAnswers):
+        """The user's answers to pending DWG readings; applied without any AI call."""
+        with projects.lock:
+            state = projects.get(ident)
+            projects.check_revision(state, body.revision)
+            cad = state.get("cad")
+            if not cad:
+                raise HTTPException(409, "Este proyecto no tiene lecturas DWG pendientes.")
+            types = {i["id"]: i["type"] for i in cad.get("pending", [])}
+            stored = dict(state.get("cad_answers") or {})
+            for ident_item, value in body.answers.items():
+                kind = types.get(ident_item)
+                if kind is None:
+                    raise HTTPException(422, f"{ident_item}: no es una lectura pendiente.")
+                field, model = dwg.ANSWER_TYPES[kind]
+                try:
+                    answer = model.model_validate({**value, "id": ident_item}).model_dump()
+                except ValueError as exc:
+                    raise HTTPException(422, f"{ident_item}: respuesta no válida.") from exc
+                stored.setdefault(field, [])
+                stored[field] = [a for a in stored[field] if a["id"] != ident_item] + [answer]
+            state.update(cad_answers=stored, status="running", stage="resolving", error=None)
+            projects.save(state)
+            projects.executor.submit(projects.interpret_cad, ident, False)
             return state
 
     @app.post("/api/projects/{ident}/validate")
@@ -513,6 +754,13 @@ def create_app(
             if not draft or not draft.get("conceptual"):
                 raise HTTPException(
                     409, "No hay una interpretación de la IA que aprobar; usa la edición manual."
+                )
+            blocking = [p for p in (state.get("cad") or {}).get("pending", []) if p["blocking"]]
+            if blocking:
+                raise HTTPException(
+                    409,
+                    f"Quedan {len(blocking)} lecturas del DWG sin resolver. Resuélvelas en "
+                    "«Pendiente» (o márcalas como no modeladas) antes de aprobar.",
                 )
             draft["calibration"]["confirmed"] = True
             draft["floor"]["confirmed"] = True
@@ -572,6 +820,10 @@ def create_app(
         if filename == "source.pdf":
             return FileResponse(
                 folder / "source.pdf", media_type="application/pdf", filename=state["filename"]
+            )
+        if filename == "overview.png" and state.get("plans"):
+            return FileResponse(
+                folder / "evidence/overview.png", headers={"Cache-Control": "no-store"}
             )
         page_match = re.fullmatch(r"page-([1-9][0-9]?)\.png", filename)
         if page_match:

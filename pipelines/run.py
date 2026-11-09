@@ -1,4 +1,4 @@
-"""Transactional PDF → geometry → Blender → QA → GLB → portable website pipeline."""
+"""Transactional PDF/DWG → geometry → Blender → QA → GLB → portable website pipeline."""
 
 import argparse
 import json
@@ -18,6 +18,17 @@ from pipelines.pdf.extract import extract
 from pipelines.pdf.synthetic import create
 
 log = logging.getLogger("aav")
+CAD_SUFFIXES = {".dwg": "dwg", ".dxf": "dxf"}
+
+
+def cad_source(path):
+    """Source record of a DWG/DXF input: its own SHA-256 (the drawing is one sheet)."""
+    return {
+        "filename": path.name,
+        "sha256": sha256(path),
+        "page_count": 1,
+        "format": CAD_SUFFIXES[path.suffix.lower()],
+    }
 
 
 def execute(command, log_file, cwd=ROOT):
@@ -40,7 +51,9 @@ def source_check(g, raw):
         g.source.sha256 != raw["source"]["sha256"]
         or g.source.page_count != raw["source"]["page_count"]
     ):
-        raise ValueError("Reviewed geometry does not match this PDF SHA-256/page count.")
+        raise ValueError("Reviewed geometry does not match this source SHA-256/page count.")
+    if g.source.format != raw["source"].get("format", "pdf"):
+        raise ValueError("Reviewed geometry was read from a different source format.")
     t = g.transform
     for key in ["walls", "openings", "rooms", "furniture", "slabs", "roofs", "outdoor_areas"]:
         for item in getattr(g, key):
@@ -95,6 +108,11 @@ def web_manifest(g, output):
         "quality": {"passed": True},
         "bounds": {"min": [lo[0], lo[2], -hi[1]], "max": [hi[0], hi[2], -lo[1]]},
         "source_sha256": g.source.sha256,
+        "source": {
+            "format": g.source.format,
+            "sha256": g.source.sha256,
+            "converter": g.source.converter,
+        },
         "material_note": "Acabados ilustrativos; geometría procedente del plano.",
         "finishes": {k: v.model_dump() for k, v in g.finishes.items()},
         "has_roof": bool(g.roofs),
@@ -120,6 +138,7 @@ def run(args):
     output.mkdir(parents=True, exist_ok=True)
     work = Path(tempfile.mkdtemp(prefix=".run-", dir=output))
     try:
+        cad = bool(args.input) and args.input.suffix.lower() in CAD_SUFFIXES
         if args.demo:
             create(work / "original.pdf")
         else:
@@ -127,9 +146,16 @@ def run(args):
                 raise ValueError(
                     "Provide --input an existing PDF, or --demo for synthetic test data."
                 )
-            shutil.copy2(args.input, work / "original.pdf")
-        raw = extract(work / "original.pdf", work / "evidence")
-        if args.vision:
+            target = work / ("original" + (args.input.suffix.lower() if cad else ".pdf"))
+            shutil.copy2(args.input, target)
+        if cad:
+            # DWG/DXF geometry is read and reviewed in the web flow; here its hash is re-checked.
+            if not args.geometry:
+                raise ValueError("A DWG/DXF source needs reviewed geometry (--geometry).")
+            raw = {"source": cad_source(target)}
+        else:
+            raw = extract(work / "original.pdf", work / "evidence")
+        if args.vision and not cad:
             from pipelines.pdf.vision import interpret
 
             interpret(work / "original.pdf", work)
@@ -218,6 +244,8 @@ def run(args):
             work / "provenance.json",
             {
                 "source_sha256": g.source.sha256,
+                "source_format": g.source.format,
+                "converter": g.source.converter,
                 "geometry_sha256": sha256(work / "geometry.json"),
                 "schema_version": g.schema_version,
                 "revision": revision(),
@@ -250,7 +278,15 @@ def run(args):
         if args.site_assets:
             publish_local_assets(output, args.site_assets.resolve())
             execute(["npm", "run", "build"], output / "site-build.log", site_root)
-        write_json(output / "run-status.json", {"passed": True, "source_sha256": g.source.sha256})
+        write_json(
+            output / "run-status.json",
+            {
+                "passed": True,
+                "source_sha256": g.source.sha256,
+                "source_format": g.source.format,
+                "converter": g.source.converter,
+            },
+        )
         progress("completed")
         return output
     except Exception as exc:
