@@ -335,11 +335,11 @@ def check(geometry: Geometry, output: Path, include_renders=True, tolerance_m=0.
             record("orthographic_no_clipping", not bool(border.any()))
         except (OSError, ValueError, KeyError) as exc:
             record("orthographic_source_overlay", False, detail=str(exc))
+    names = ["exterior", "axonometric"] + (["interior"] if geometry.rooms else [])
+    if (output / "views.json").is_file():
+        names += [v["id"] for v in json.loads((output / "views.json").read_text())]
     required = (
-        [
-            output / "renders" / f"{name}.webp"
-            for name in (["exterior", "axonometric"] + (["interior"] if geometry.rooms else []))
-        ]
+        [output / "renders" / f"{name}.webp" for name in dict.fromkeys(names)]
         if include_renders
         else []
     )

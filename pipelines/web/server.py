@@ -258,7 +258,9 @@ class Projects:
                 summary = (
                     ["Acabados ilustrativos según la descripción del cliente: " + description]
                     if finishes
-                    else ["Acabados por defecto del estudio (sin descripción de materiales)."]
+                    else [
+                        "Acabados: paleta del estudio, lujo minimalista (roble, mármol, latón, bouclé)."
+                    ]
                 )
                 draft.update(
                     finishes=finishes,
@@ -299,8 +301,8 @@ class Projects:
                 geometry=approved,
                 vision=False,
                 device="auto",
-                resolution=960,
-                samples=64,
+                resolution=1600,
+                samples=160,
                 clay=False,
                 site_assets=None,
                 site_root=self.site_dir,
@@ -556,12 +558,10 @@ def create_app(
             "geometry.json",
             "quality-report.json",
             "scene.blend",
-            "renders/exterior.webp",
-            "renders/interior.webp",
-            "renders/axonometric.webp",
         }
+        render = re.fullmatch(r"renders/(exterior|axonometric|interior(-[2-9])?)\.webp", filename)
         if (
-            filename not in allowed
+            (filename not in allowed and not render)
             or state["status"] != "succeeded"
             or state.get("result_revision") != state["revision"]
         ):

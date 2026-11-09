@@ -62,6 +62,17 @@ def source_check(g, raw):
                     )
 
 
+def render_views(output):
+    path = output / "views.json"
+    if path.is_file():
+        return json.loads(path.read_text())
+    return [
+        {"id": "exterior", "label": "Exterior"},
+        {"id": "interior", "label": "Interior"},
+        {"id": "axonometric", "label": "Axonometría"},
+    ]
+
+
 def web_manifest(g, output):
     inspection = json.loads((output / "scene-inspection.json").read_text())
     objs = inspection["objects"]
@@ -76,13 +87,9 @@ def web_manifest(g, output):
         "units": "m",
         "model_url": "model.glb",
         "renders": [
-            {"id": n, "label": label, "url": f"renders/{n}.webp"}
-            for n, label in [
-                ("exterior", "Exterior"),
-                ("interior", "Interior"),
-                ("axonometric", "Axonometría"),
-            ]
-            if (output / f"renders/{n}.webp").exists()
+            {"id": v["id"], "label": v["label"], "url": f"renders/{v['id']}.webp"}
+            for v in render_views(output)
+            if (output / f"renders/{v['id']}.webp").exists()
         ],
         "floors": [f.model_dump(exclude={"evidence"}) for f in g.floors],
         "quality": {"passed": True},
