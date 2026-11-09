@@ -612,6 +612,8 @@ class Calls:
         self.audit_dir = audit_dir
         self.log = []
         self.progress = None  # Optional callback(step) before each billed call.
+        self.effort = "high"  # Reasoning effort for gpt-5/o models.
+        self.max_output_tokens = 32000
 
     def key(self, *parts):
         return hashlib.sha256(":".join([self.model, *parts]).encode()).hexdigest()
@@ -636,8 +638,12 @@ class Calls:
         response = self.client.responses.parse(
             model=self.model,
             store=False,
-            max_output_tokens=32000,
-            **({"reasoning": {"effort": "high"}} if self.model.startswith(("gpt-5", "o")) else {}),
+            max_output_tokens=self.max_output_tokens,
+            **(
+                {"reasoning": {"effort": self.effort}}
+                if self.model.startswith(("gpt-5", "o"))
+                else {}
+            ),
             instructions=instructions,
             input=[{"role": "user", "content": content}],
             text_format=schema,
@@ -647,6 +653,8 @@ class Calls:
         meta = {
             "usage": response.usage.model_dump() if response.usage else None,
             "response_id": response.id,
+            "seconds": round(time.monotonic() - started, 1),
+            "effort": self.effort,
         }
         log.info("OpenAI %s call finished in %.0f s", step, time.monotonic() - started)
         record = {"value": response.output_parsed.model_dump(), "meta": meta, "step": step}
