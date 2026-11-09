@@ -122,10 +122,43 @@ def web_manifest(g, output):
 
 def publish_local_assets(output, destination):
     # Explicit local export; only derived presentation assets are copied, never the PDF.
+    # AI-enhanced images never enter a site package (originals only).
+    from pipelines.postprocess.enhance import copy_site_renders, strip_for_site
+
     destination.mkdir(parents=True, exist_ok=True)
-    for name in ["model.glb", "manifest.json"]:
-        shutil.copy2(output / name, destination / name)
-    shutil.copytree(output / "renders", destination / "renders", dirs_exist_ok=True)
+    shutil.copy2(output / "model.glb", destination / "model.glb")
+    write_json(
+        destination / "manifest.json",
+        strip_for_site(json.loads((output / "manifest.json").read_text())),
+    )
+    copy_site_renders(output, destination)
+
+
+def enhance_step(args, output, raw, source):
+    """Optional illustrative AI enhancement of the delivered renders; never fails the run."""
+    from pipelines.postprocess import enhance, location
+
+    options = dict(getattr(args, "enhancement", None) or {})
+    try:
+        if "location" not in options:
+            if source.suffix.lower() == ".dxf":
+                options["location"] = location.from_dxf(source, source.name)
+            elif "pages" in raw:
+                options["location"] = location.from_pdf(raw, getattr(args.input, "name", None))
+            else:
+                options["location"] = location.missing()
+        write_json(
+            output / "enhancement-input.json",
+            {k: options.get(k) for k in ("location", "description")},
+        )
+    except Exception:
+        log.exception("Location for the enhancement could not be read")
+        options["location"] = location.missing()
+    options.setdefault("cache_dir", output.parent / "ai-cache")
+    options.setdefault("audit_dir", output / "ai-audit")
+    return enhance.safe_run(
+        output, enabled=bool(args.enhance), progress=getattr(args, "activity", None), **options
+    )
 
 
 def run(args):
@@ -139,8 +172,9 @@ def run(args):
     work = Path(tempfile.mkdtemp(prefix=".run-", dir=output))
     try:
         cad = bool(args.input) and args.input.suffix.lower() in CAD_SUFFIXES
+        target = work / "original.pdf"
         if args.demo:
-            create(work / "original.pdf")
+            create(target)
         else:
             if not args.input or not args.input.is_file():
                 raise ValueError(
@@ -287,6 +321,10 @@ def run(args):
                 "converter": g.source.converter,
             },
         )
+        # The originals are delivered above; the illustrative enhancement can only add to them.
+        if getattr(args, "enhance", None) is not None:
+            progress("enhancing")
+            enhance_step(args, output, raw, output / target.name)
         progress("completed")
         return output
     except Exception as exc:
@@ -327,6 +365,14 @@ def main():
     p.add_argument("--resolution", type=int, default=960)
     p.add_argument("--samples", type=int, default=64)
     p.add_argument("--clay", action="store_true")
+    p.add_argument(
+        "--enhance",
+        action="store_const",
+        const=True,
+        default=None,
+        help="After delivery, send the renders to the OpenAI image-edit API for an illustrative "
+        "enhancement (needs OPENAI_API_KEY; originals are always kept)",
+    )
     p.add_argument(
         "--site-assets",
         type=Path,

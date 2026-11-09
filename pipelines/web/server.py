@@ -26,6 +26,8 @@ from pipelines.cad.convert import convert
 from pipelines.cad.convert import label as converter_label
 from pipelines.common import ROOT, sha256, write_json
 from pipelines.pdf.extract import extract
+from pipelines.postprocess import enhance as enhancement
+from pipelines.postprocess import location as places
 from pipelines.run import run
 from pipelines.web import dwg
 from pipelines.web.grounded import propose
@@ -58,6 +60,15 @@ class SaveDraft(Revision):
 
 class Description(Revision):
     description: str = Field(default="", max_length=MAX_DESCRIPTION)
+
+
+class Approve(Revision):
+    # "Mejorar renders con IA": illustrative OpenAI enhancement after the Blender renders.
+    enhance: bool = True
+
+
+class LocationEdit(Revision):
+    text: str = Field(default="", max_length=300)
 
 
 class Interpret(Revision):
@@ -244,6 +255,7 @@ class Projects:
                 draft=draft,
                 issues=issues,
                 error=None,
+                location=self.detect_location(ident),
             )
             self.update(ident, status="running", stage="interpreting")
             self.interpret(ident)
@@ -281,6 +293,7 @@ class Projects:
             self.update(
                 ident, dxf_file=str(dxf.relative_to(folder)), cad_source=source, plans=plans
             )
+            self.update(ident, location=self.detect_location(ident))
             if len(plans) > 1:
                 self.update(ident, status="review", stage="choose_plan", error=None)
                 return
@@ -508,6 +521,71 @@ class Projects:
             state.pop("manifest_url", None)
             self.save(state)
 
+    def detect_location(self, ident):
+        """Location read from the drawing's own text; never fails the caller."""
+        try:
+            return enhancement.detect(self.folder(ident), self.get(ident))
+        except Exception:
+            log.exception("Location detection failed")
+            return places.missing()
+
+    def location_of(self, ident):
+        """Stored location; projects created before this feature are read once, lazily."""
+        with self.lock:
+            state = self.get(ident)
+            if state.get("location") is None and state.get("pages"):
+                state["location"] = self.detect_location(ident)
+                self.save(state)
+            return state.get("location") or places.missing()
+
+    def record_enhancement(self, state, output):
+        try:
+            summary = json.loads((output / "manifest.json").read_text()).get("enhancement")
+        except (OSError, ValueError):
+            summary = None
+        if summary:
+            state["enhancement"] = summary
+            usage = state.get("ai_usage") if isinstance(state.get("ai_usage"), dict) else {}
+            state["ai_usage"] = {**usage, "enhancement": enhancement.usage_of(summary)}
+
+    def enhance_options(self, ident, state):
+        folder = self.folder(ident)
+        return {
+            "location": self.location_of(ident),
+            "description": state.get("description") or "",
+            "cache_dir": self.root / "ai-cache",
+            "audit_dir": folder / "ai-audit",
+        }
+
+    def activity(self, ident):
+        return lambda payload: self.update(ident, activity=payload)
+
+    def enhance_job(self, ident):
+        """«Mejorar de nuevo»: only the enhancement step, on the delivered renders."""
+        folder = self.folder(ident)
+        state = self.get(ident)
+        output = folder / state["result"]
+        try:
+            enhancement.safe_run(
+                output,
+                progress=self.activity(ident),
+                force=True,
+                **self.enhance_options(ident, state),
+            )
+        except Exception:
+            log.exception("Enhancement rerun failed")
+        with self.lock:
+            state = self.get(ident)
+            self.record_enhancement(state, output)
+            base = (state.get("manifest_url") or "").split("&e=")[0]
+            state.update(
+                status="succeeded",
+                stage="completed",
+                error=None,
+                manifest_url=f"{base}&e={uuid4().hex[:8]}" if base else None,
+            )
+            self.save(state)
+
     def finishes_job(self, ident):
         try:
             self.apply_finishes(ident)
@@ -523,6 +601,8 @@ class Projects:
             output = folder / "runs" / uuid4().hex
             approved = folder / f"approved-{revision}.json"
             write_json(approved, geometry.model_dump())
+            state = self.get(ident)
+            enhance = bool(state.get("enhance", True)) and enhancement.enabled_by_env()
             args = SimpleNamespace(
                 input=folder / self.get(ident).get("source_file", "source.pdf"),
                 output=output,
@@ -536,20 +616,26 @@ class Projects:
                 site_assets=None,
                 site_root=self.site_dir,
                 progress=lambda stage: self.update(ident, stage=stage),
+                activity=self.activity(ident),
+                enhance=enhance,
+                enhancement=self.enhance_options(ident, state),
             )
             self.runner(args)
             status = json.loads((output / "run-status.json").read_text())
             if not status.get("passed") or not (output / "manifest.json").is_file():
                 raise ValueError("La generación no produjo una entrega validada.")
-            self.update(
-                ident,
-                status="succeeded",
-                stage="completed",
-                error=None,
-                result=str(output.relative_to(folder)),
-                manifest_url=f"/api/projects/{ident}/files/manifest.json?v={output.name}",
-                result_revision=revision,
-            )
+            with self.lock:
+                state = self.get(ident)
+                self.record_enhancement(state, output)
+                state.update(
+                    status="succeeded",
+                    stage="completed",
+                    error=None,
+                    result=str(output.relative_to(folder)),
+                    manifest_url=f"/api/projects/{ident}/files/manifest.json?v={output.name}",
+                    result_revision=revision,
+                )
+                self.save(state)
         except Exception as exc:
             log.exception("Local project operation failed")
             self.update(ident, status="failed", stage="generation_failed", error=str(exc)[:3000])
@@ -653,8 +739,42 @@ def create_app(
 
     @app.get("/api/projects/{ident}")
     def detail(ident: str):
+        projects.location_of(ident)
         with projects.lock:
-            return projects.get(ident)
+            return {**projects.get(ident), "enhance_server": enhancement.enabled_by_env()}
+
+    @app.put("/api/projects/{ident}/location")
+    def edit_location(ident: str, body: LocationEdit):
+        """The user's correction of the detected location (illustrative context only)."""
+        previous = projects.location_of(ident)
+        with projects.lock:
+            state = projects.get(ident)
+            projects.check_revision(state, body.revision)
+            text = body.text.strip()
+            if text and previous.get("status") != "missing" and text == previous.get("text"):
+                return state
+            state["location"] = places.user_location(text, previous)
+            # The location never changes geometry: a delivered result stays valid.
+            current = state.get("result_revision") == state["revision"]
+            state["revision"] += 1
+            if current:
+                state["result_revision"] = state["revision"]
+            return projects.save(state)
+
+    @app.post("/api/projects/{ident}/enhance", status_code=202)
+    def enhance_again(ident: str, body: Revision):
+        """«Mejorar de nuevo»: rerun only the AI enhancement on the delivered renders."""
+        with projects.lock:
+            state = projects.get(ident)
+            projects.check_revision(state, body.revision)
+            if state["status"] != "succeeded" or state.get("result_revision") != state["revision"]:
+                raise HTTPException(409, "No hay renders terminados de esta revisión que mejorar.")
+            if not enhancement.enabled_by_env():
+                raise HTTPException(409, "La mejora con IA está desactivada en este servidor.")
+            state.update(status="running", stage="enhancing", error=None)
+            projects.save(state)
+            projects.executor.submit(projects.enhance_job, ident)
+            return state
 
     @app.put("/api/projects/{ident}/draft")
     def save_draft(ident: str, body: SaveDraft):
@@ -764,7 +884,7 @@ def create_app(
             return state
 
     @app.post("/api/projects/{ident}/approve", status_code=202)
-    def approve(ident: str, body: Revision):
+    def approve(ident: str, body: Approve):
         """Explicit user approval of the AI interpretation, then Blender generation."""
         with projects.lock:
             state = projects.get(ident)
@@ -801,6 +921,7 @@ def create_app(
                 stage="queued",
                 error=None,
                 issues=[],
+                enhance=body.enhance,
             )
             state.pop("manifest_url", None)
             projects.save(state)
@@ -858,10 +979,17 @@ def create_app(
             "quality-report.json",
             "scene.blend",
         }
-        render = re.fullmatch(r"renders/(exterior|axonometric|interior(-[2-9])?)\.webp", filename)
+        render = re.fullmatch(
+            r"renders/(enhanced/)?(exterior|axonometric|interior(-[2-9])?)\.webp", filename
+        )
+        # While only the enhancement reruns, the delivered result stays viewable.
+        delivered = state["status"] == "succeeded" or (
+            state["status"] == "running" and state.get("stage") == "enhancing"
+        )
         if (
             (filename not in allowed and not render)
-            or state["status"] != "succeeded"
+            or not delivered
+            or not state.get("result")
             or state.get("result_revision") != state["revision"]
         ):
             raise HTTPException(404, "Resultado no disponible o pendiente de nueva validación.")
