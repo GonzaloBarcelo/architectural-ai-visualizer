@@ -7,6 +7,7 @@ AIA/English conventions are included; add an office's own names here.
 
 import re
 import unicodedata
+from difflib import SequenceMatcher
 
 # Layers whose cut geometry (solid hatches, closed outlines, parallel line pairs) are walls.
 WALL_LAYERS = [
@@ -49,6 +50,8 @@ IGNORED_LAYERS = [
     r"VIEWPORT",
     r"\bEJES?\b",
     r"REJILLA",
+    r"DEMOLI",  # demolished walls must never be read as walls
+    r"NOPLOT",
 ]
 
 # Block names. A door/window block in a wall gap gives the opening kind directly.
@@ -135,19 +138,70 @@ def matches(name, patterns):
     return any(re.search(p, value) for p in patterns)
 
 
+# Whole words for typo-tolerant layer names (e.g. "a.venatana" → VENTANA, "a.mobel" → MOBLE).
+LAYER_WORDS = {
+    "ignored": ["COTAS", "CAJETIN", "HABITABILIDAD", "DEMOLICION", "DEMOLICIO"],
+    "wall": [
+        "MUROS",
+        "TABIQUES",
+        "TABIQUERIA",
+        "SECCION",
+        "SECCIO",
+        "CERRAMIENTO",
+        "PARED",
+        "PAREDES",
+        "FABRICA",
+        "PILARES",
+    ],
+    "door": ["PUERTA", "PUERTAS", "PORTES"],
+    "window": ["VENTANA", "VENTANAS", "FINESTRA", "FINESTRES"],
+    "carpentry": ["CARPINTERIA", "CARPINTERIAS", "FUSTERIA"],
+    "furniture": [
+        "MOBLE",
+        "MOBLES",
+        "MUEBLE",
+        "MUEBLES",
+        "MOBILIARIO",
+        "MOBILIARI",
+        "SANITARIOS",
+        "SANITARIS",
+        "EQUIPAMIENTO",
+    ],
+}
+NEAR_SPELLING = 0.8  # SequenceMatcher ratio for a layer word of 5+ letters
+ROLE_PATTERNS = [
+    ("ignored", IGNORED_LAYERS),
+    ("wall", WALL_LAYERS),
+    ("door", DOOR_LAYERS),
+    ("window", WINDOW_LAYERS),
+    ("carpentry", CARPENTRY_LAYERS),
+    ("furniture", FURNITURE_LAYERS),
+]
+
+
+def layer_match(layer):
+    """(role, how): how is "nombre" for a listed pattern, "parecido a «WORD»" for a near
+    spelling, or (None, None) when the layer name says nothing."""
+    for role, patterns in ROLE_PATTERNS:
+        if matches(layer, patterns):
+            return role, "nombre"
+    best = (0.0, None, None)
+    for token in re.findall(r"[A-Z0-9]+", normalise(layer)):
+        if len(token) < 5:
+            continue
+        for role, words in LAYER_WORDS.items():
+            for word in words:
+                ratio = SequenceMatcher(None, token, word).ratio()
+                if ratio >= NEAR_SPELLING and ratio > best[0]:
+                    best = (ratio, role, word)
+    if best[1]:
+        return best[1], f"parecido a «{best[2]}»"
+    return None, None
+
+
 def layer_role(layer):
     """'ignored' | 'wall' | 'door' | 'window' | 'carpentry' | 'furniture' | None."""
-    for role, patterns in [
-        ("ignored", IGNORED_LAYERS),
-        ("wall", WALL_LAYERS),
-        ("door", DOOR_LAYERS),
-        ("window", WINDOW_LAYERS),
-        ("carpentry", CARPENTRY_LAYERS),
-        ("furniture", FURNITURE_LAYERS),
-    ]:
-        if matches(layer, patterns):
-            return role
-    return None
+    return layer_match(layer)[0]
 
 
 def furniture_kind(texts, width):

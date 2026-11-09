@@ -952,6 +952,7 @@ def propose(
             "height": Sheet(reading["region"]).height,
         },
         "counts": counts(items),
+        "layers": reading["layers"],
         "items": items,
         "pending": pending,
         "doubts": payload["items"],

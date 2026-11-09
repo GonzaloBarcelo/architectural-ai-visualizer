@@ -280,3 +280,67 @@ def test_complex_wall_outlines_split_into_valid_convex_pieces():
     assert len(pieces) > 1
     assert all(p.is_valid and p.area > 0 and p.equals(p.convex_hull) for p in pieces)
     assert sum(p.area for p in pieces) == pytest.approx(outline.area, rel=1e-4)
+
+
+def test_every_layer_is_listed_with_role_match_and_use(tmp_path):
+    path = build(tmp_path / "flat.dxf")
+    doc = ezdxf.readfile(path)
+    # Near-duplicate/misspelt names, an off layer and an empty layer, as in real drawings.
+    for name in ("a.moble", "a.mobles", "a.venatana", "a.demolició", "a.apagada", "VACIA"):
+        doc.layers.add(name)
+    doc.layers.get("a.apagada").off()
+    msp = doc.modelspace()
+    msp.add_blockref("INODORO", (4200, 3000), dxfattribs={"layer": "a.moble"}).dxf.rotation = 0
+    msp.add_lwpolyline(
+        [(500, 3300), (1100, 3300), (1100, 3700), (500, 3700)],
+        close=True,
+        dxfattribs={"layer": "a.mobles"},
+    )
+    # A wall drawn only on the off layer and a "wall" on the demolition layer: never read.
+    msp.add_lwpolyline(
+        [(1000, 2000), (1100, 2000), (1100, 3000), (1000, 3000)],
+        close=True,
+        dxfattribs={"layer": "a.apagada"},
+    )
+    msp.add_lwpolyline(
+        [(4000, 1000), (4100, 1000), (4100, 1800), (4000, 1800)],
+        close=True,
+        dxfattribs={"layer": "a.demolició"},
+    )
+    path = tmp_path / "layers.dxf"
+    doc.saveas(path)
+    r = reading(path)
+    rows = {row["layer"]: row for row in r["layers"]}
+    assert set(rows) >= {"MUROS", "PUERTAS", "a.moble", "a.mobles", "a.venatana", "VACIA"}
+    assert rows["a.moble"]["role"] == rows["a.mobles"]["role"] == "furniture"
+    assert rows["a.moble"]["used"] == ["mobiliario"] and rows["a.mobles"]["used"] == ["mobiliario"]
+    assert rows["a.venatana"]["role"] == "window"
+    assert rows["a.venatana"]["match"] == "parecido a «VENTANA»"
+    assert rows["a.apagada"]["status"] == "apagada o congelada"
+    assert rows["a.demolició"]["status"] == "ignorada"
+    assert rows["VACIA"]["status"] == "vacía en la planta"
+    assert rows["MUROS"]["used"] == ["muros"] and rows["MUROS"]["in_plan"]["LWPOLYLINE"] == 7
+    wall_handles = {h for w in r["walls"] for h in w["handles"]}
+    hidden = {
+        e.dxf.handle
+        for e in R.load(path).modelspace()
+        if e.dxf.layer in ("a.apagada", "a.demolició")
+    }
+    assert not wall_handles & hidden
+
+
+def test_near_spelling_never_turns_unrelated_layers_into_walls():
+    for name in (
+        "a.projecció",
+        "B-Projección-Superior",
+        "a.construcció",
+        "E-Instalaciones-Fontaneria",
+        "a.discontinua",
+        "HH_Paviment_Hatch",
+        "A.Espacios_SU",
+        "a.climatización",
+    ):
+        assert C.layer_role(name) is None, name
+    assert C.layer_match("a.venatana") == ("window", "parecido a «VENTANA»")
+    assert C.layer_match("TABIQEUS")[0] == "wall"
+    assert C.layer_match("a.moble") == ("furniture", "nombre")

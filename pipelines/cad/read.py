@@ -186,6 +186,18 @@ def text_of(e):
 # --- Units and plans ---------------------------------------------------------------------
 
 
+def hidden_layers(doc):
+    """Layers switched off or frozen: not part of the drawing as shown, so never read."""
+    out = set()
+    for layer in doc.layers:
+        try:
+            if layer.is_off() or layer.is_frozen():
+                out.add(layer.dxf.name)
+        except CAD_ERRORS:
+            continue
+    return out
+
+
 def wall_layer(layer, extra=(), excluded=()):
     return layer not in excluded and (layer in extra or C.layer_role(layer) == "wall")
 
@@ -193,6 +205,7 @@ def wall_layer(layer, extra=(), excluded=()):
 def raw_walls(doc, extra=(), excluded=()):
     """Wall-layer polygons in drawing units, before scale is known."""
     msp = doc.modelspace()
+    excluded = set(excluded) | hidden_layers(doc)
     extents = ebbox.extents([e for e in msp if wall_layer(e.dxf.layer, extra, excluded)], fast=True)
     size = max(extents.size.x, extents.size.y) if extents.has_data else 1.0
     tolerance = max(size, 1e-6) / 20000
@@ -293,7 +306,10 @@ def plan_name(texts, bounds, index):
 
 def all_texts(doc, factor):
     out = []
+    hidden = hidden_layers(doc)
     for e in doc.modelspace():
+        if e.dxf.layer in hidden:
+            continue
         kind = e.dxftype()
         if kind in ("TEXT", "MTEXT"):
             items = [(e, text_of(e))]
@@ -745,8 +761,8 @@ def gap_for_block(block, gaps):
     best, score = None, None
     for g in gaps:
         inter = block["rect"].intersection(g["rect"]).area
-        if inter <= 0:
-            continue
+        if inter < 0.15 * g["rect"].area:
+            continue  # touching or a sliver overlap: a neighbouring piece, not this opening's
         pts = [project(g, p) for p in list(block["rect"].exterior.coords)[:-1]]
         span = min(max(p[0] for p in pts), g["width"]) - max(min(p[0] for p in pts), 0)
         if span < 0.5 * g["width"]:
@@ -779,12 +795,17 @@ def read_plan(doc, plan, units, extra_walls=(), excluded_walls=()):
     notes = []
 
     entities, boxes = [], {}
+    hidden = hidden_layers(doc)
+    elsewhere = Counter()
     for e in msp:
+        if e.dxf.layer in hidden:
+            continue
         b = entity_box(e)
         if b is None:
             continue
         b = tuple(v * factor for v in b)
         if b[2] < region[0] or b[0] > region[2] or b[3] < region[1] or b[1] > region[3]:
+            elsewhere[e.dxf.layer] += 1
             continue
         entities.append(e)
         boxes[e.dxf.handle] = b
@@ -834,7 +855,7 @@ def read_plan(doc, plan, units, extra_walls=(), excluded_walls=()):
         if region[0] <= t["x"] <= region[2] and region[1] <= t["y"] <= region[3]
     ]
 
-    blocks, annotations = [], 0
+    blocks, annotations = [], Counter()
     for e in entities:
         if e.dxftype() != "INSERT" or C.layer_role(e.dxf.layer) == "ignored":
             continue
@@ -847,7 +868,7 @@ def read_plan(doc, plan, units, extra_walls=(), excluded_walls=()):
             or "DIMENSION" in geometry["types"]
             or not set(geometry["types"]) - SKIP_TYPES - {"CIRCLE", "INSERT"}
         ):
-            annotations += 1
+            annotations[e.dxf.layer] += 1
             continue
         attributes = {a.dxf.tag: a.dxf.text for a in getattr(e, "attribs", []) if a.dxf.text}
         blocks.append(
@@ -862,7 +883,9 @@ def read_plan(doc, plan, units, extra_walls=(), excluded_walls=()):
             }
         )
     if annotations:
-        notes.append(f"{annotations} bloques de anotación ignorados (cotas, símbolos, círculos).")
+        notes.append(
+            f"{sum(annotations.values())} bloques de anotación ignorados (cotas, símbolos, círculos)."
+        )
 
     # Blocks and loose carpentry inside each gap are the evidence of an opening.
     furniture_blocks, orphans = [], []
@@ -973,7 +996,11 @@ def read_plan(doc, plan, units, extra_walls=(), excluded_walls=()):
             if short >= 0.2 and long <= 8:
                 outlines.append((rect, e))
     for rect, e in sorted(outlines, key=lambda item: -item[0].area):
-        if any(rect.intersection(f["rect"]).area > 0.8 * rect.area for f in furniture):
+        # Same object as a block (covers most of it) → skip; a piece inside a big block stays.
+        if any(
+            rect.intersection(f["rect"]).area > 0.8 * rect.area and rect.area > 0.5 * f["rect"].area
+            for f in furniture
+        ):
             continue
         if rect.intersection(walls).area > 0.5 * rect.area:
             continue
@@ -1059,7 +1086,42 @@ def read_plan(doc, plan, units, extra_walls=(), excluded_walls=()):
         notes.append("El perímetro de la planta no es único; se usa el recinto mayor.")
     slab = Polygon(slab_parts[0].exterior).simplify(0.02)
 
+    inventory = layer_inventory(
+        doc,
+        entities,
+        elsewhere,
+        hidden,
+        {
+            "walls": wall_records,
+            "gaps": gaps,
+            "furniture": furniture,
+            "rooms": rooms,
+            "suspects": suspect_layers,
+            "annotations": annotations,
+            "hatches": hatches,
+            "texts": texts,
+        },
+        extra_walls,
+    )
+    for row in inventory:
+        if row["match"] and row["match"].startswith("parecido"):
+            notes.append(
+                f"Capa «{row['layer']}» leída como {ROLE_NAMES[row['role']]} "
+                f"(nombre {row['match']})."
+            )
+        if row["status"] == "sin uso" and row["in_plan"]:
+            count = sum(row["in_plan"].values())
+            reason = (
+                "su nombre no indica muros, huecos ni mobiliario"
+                if row["role"] is None
+                else f"capa de {ROLE_NAMES[row['role']]}, pero ningún elemento está en un hueco "
+                "de muro ni forma una pieza"
+            )
+            notes.append(
+                f"Capa «{row['layer']}»: {count} elementos en la planta sin uso ({reason})."
+            )
     return {
+        "layers": inventory,
         "units": units,
         "plan": plan,
         "region": region,
@@ -1075,6 +1137,80 @@ def read_plan(doc, plan, units, extra_walls=(), excluded_walls=()):
         "slab": slab,
         "notes": notes,
     }
+
+
+ROLE_NAMES = {
+    "wall": "muros",
+    "door": "puertas",
+    "window": "ventanas",
+    "carpentry": "carpintería",
+    "furniture": "mobiliario",
+    "ignored": "anotación (ignorada)",
+    None: "sin función",
+}
+
+
+def layer_inventory(doc, entities, elsewhere, hidden, found, extra_walls=()):
+    """Every layer of the drawing: role, how its name matched, state, contents and use."""
+    in_plan = {}
+    for e in entities:
+        in_plan.setdefault(e.dxf.layer, Counter())[e.dxftype()] += 1
+    used = {}
+
+    def mark(layer, what):
+        if layer:
+            used.setdefault(layer, set()).add(what)
+
+    for w in found["walls"]:
+        for layer in w["layers"]:
+            mark(layer, "muros")
+    for g in found["gaps"]:
+        for b in g["blocks"]:
+            mark(b["layer"], "huecos")
+        for item in g["loose"]:
+            mark(item["layer"], "huecos")
+    for f in found["furniture"]:
+        mark(f["layer"], "mobiliario")
+    rooms = found["rooms"]
+    for r in rooms:
+        mark(r["name_layer"], "rótulos de estancia")
+    finish_handles = {r["finish_handle"] for r in rooms if r["finish_handle"]}
+    for e in entities:
+        if e.dxf.handle in finish_handles:
+            mark(e.dxf.layer, "pavimentos")
+    for s in found["suspects"]:
+        mark(s["layer"], "duda: ¿muros?")
+    for layer, n in found["annotations"].items():
+        mark(layer, f"{n} anotaciones ignoradas")
+    names = {layer.dxf.name for layer in doc.layers} | set(in_plan) | set(elsewhere)
+    rows = []
+    for name in sorted(names, key=lambda n: (n not in in_plan, C.normalise(n))):
+        role, how = C.layer_match(name)
+        if name in extra_walls:
+            role, how = "wall", "confirmado en la revisión"
+        uses = sorted(used.get(name, set()))
+        if name in hidden:
+            status = "apagada o congelada"
+        elif uses:
+            status = "usada"
+        elif role == "ignored":
+            status = "ignorada"
+        elif name in in_plan:
+            status = "sin uso"
+        else:
+            status = "vacía en la planta"
+        rows.append(
+            {
+                "layer": name,
+                "role": role,
+                "match": how,
+                "status": status,
+                "used": uses,
+                "in_plan": dict(sorted(in_plan.get(name, Counter()).items())),
+                "elsewhere": elsewhere.get(name, 0),
+            }
+        )
+    return rows
 
 
 def closures(gaps, kinds=None):

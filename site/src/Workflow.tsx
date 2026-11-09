@@ -16,7 +16,8 @@ type CadItem = { type: string; id: string; label: string; status: ReadingStatus;
 type Pending = { type: string; id: string; label: string; detail?: string | null; options?: string[] | null; blocking: boolean; polygon?: Point[] | null };
 type Usage = { input: number; output: number; reasoning: number; cached_input: number; cost_usd: number };
 type Plan = { index: number; name: string; size_m: number[]; wall_area_m2: number };
-type Cad = { format: string; filename: string; sha256: string; converter?: string | null; units: { name: string; source: string; inferred: boolean }; plan: Plan; plans: Plan[]; items: CadItem[]; pending: Pending[]; notes: string[]; reading_seconds: number; ai: { model: string; called: boolean; cache_hit: boolean; error?: string | null; image: boolean; usage: Usage; seconds: number; items: number } };
+type LayerRow = { layer: string; role: string | null; match: string | null; status: string; used: string[]; in_plan: Record<string, number>; elsewhere: number };
+type Cad = { layers?: LayerRow[]; format: string; filename: string; sha256: string; converter?: string | null; units: { name: string; source: string; inferred: boolean }; plan: Plan; plans: Plan[]; items: CadItem[]; pending: Pending[]; notes: string[]; reading_seconds: number; ai: { model: string; called: boolean; cache_hit: boolean; error?: string | null; image: boolean; usage: Usage; seconds: number; items: number } };
 type Project = { source_format?: 'pdf' | 'dwg' | 'dxf'; cad?: Cad; plans?: Plan[]; plan_index?: number; ai_interpretation?: Draft; description?: string; id: string; filename: string; status: 'extracting' | 'review' | 'queued' | 'running' | 'succeeded' | 'failed'; stage: string; error?: string; pages?: Page[]; draft?: Draft; revision: number; issues?: Issue[]; manifest_url?: string; result_revision?: number; finishes_error?: string | null; stage_since?: { stage: string; at: string }; activity?: Activity | null };
 type Activity = { step: number; total: number; label: string; labels?: string[]; started_at: string; attempt?: number };
 type ProjectSummary = Pick<Project, 'id' | 'filename' | 'status' | 'stage'>;
@@ -36,6 +37,7 @@ const dwgSteps = ['Lectura del DWG', 'Consulta de dudas a la IA'];
 const isCad = (p?: Project | null) => !!p?.source_format && p.source_format !== 'pdf';
 const sides: Record<string, string> = { up: 'arriba', down: 'abajo', left: 'izquierda', right: 'derecha', any: 'indiferente' };
 const furnitureKinds: Record<string, string> = { bed_double: 'Cama doble', bed_single: 'Cama individual', nightstand: 'Mesita de noche', wardrobe: 'Armario', dresser: 'Cómoda', desk: 'Escritorio', shelving: 'Estantería', sofa: 'Sofá', armchair: 'Butaca', coffee_table: 'Mesa de centro', side_table: 'Mesa auxiliar', rug: 'Alfombra', tv_unit: 'Mueble TV', sideboard: 'Aparador', dining_set: 'Comedor (mesa y sillas)', dining_table: 'Mesa de comedor', chair: 'Silla', stool: 'Taburete', kitchen_counter: 'Encimera / módulo de cocina', kitchen_island: 'Isla de cocina', fridge: 'Frigorífico', toilet: 'Inodoro', bidet: 'Bidé', washbasin: 'Lavabo', shower: 'Ducha', bathtub: 'Bañera', washing_machine: 'Lavadora', plant: 'Planta', floor_lamp: 'Lámpara de pie', not_furniture: 'No es mobiliario (no modelar)' };
+const roleLabels: Record<string, string> = { wall: 'Muros', door: 'Puertas', window: 'Ventanas', carpentry: 'Carpintería', furniture: 'Mobiliario', ignored: 'Anotación' };
 const readingLabels: Record<ReadingStatus, string> = { verified: 'Leído del DWG', inferred: 'Resuelto por la IA', user: 'Indicado por ti', missing: 'Pendiente' };
 const money = (v: number) => '$' + v.toFixed(v < 0.1 ? 3 : 2);
 // Typical durations observed with gpt-5.4 at high reasoning effort; shown so a long wait never looks like a hang.
@@ -172,6 +174,8 @@ function CadPanel({ cad, busy, onAnswer }: { cad: Cad; busy: boolean; onAnswer: 
           : <p className="wf-muted">Nada pendiente: todas las lecturas están resueltas.</p>}
       </div>
     </div>
+    {cad.layers?.length ? <details className="wf-cad-notes wf-cad-layers"><summary>Capas del dibujo ({cad.layers.length}; {cad.layers.filter(l => l.status === 'usada').length} usadas, {cad.layers.filter(l => l.status === 'sin uso').length} sin uso)</summary>
+      <div className="wf-table-scroll"><table><thead><tr><th>Capa</th><th>Función</th><th>Estado</th><th>Usada para</th><th>Elementos en la planta</th></tr></thead><tbody>{cad.layers.map(l => <tr key={l.layer} className={l.status === 'sin uso' ? 'unused' : ''}><td>{l.layer}</td><td>{l.role ? roleLabels[l.role] ?? l.role : '—'}{l.match && l.match !== 'nombre' ? <small> ({l.match})</small> : null}</td><td>{l.status}</td><td>{l.used.join(', ') || '—'}</td><td>{Object.entries(l.in_plan).map(([t, n]) => `${n} ${t}`).join(', ') || '—'}{l.elsewhere ? <small> · {l.elsewhere} fuera de la planta</small> : null}</td></tr>)}</tbody></table></div></details> : null}
     {cad.notes.length ? <details className="wf-cad-notes"><summary>Notas de la lectura ({cad.notes.length})</summary><ul>{cad.notes.map((n, i) => <li key={i}>{n}</li>)}</ul></details> : null}
   </section>;
 }
