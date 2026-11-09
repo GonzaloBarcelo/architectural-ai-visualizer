@@ -8,6 +8,7 @@ from shapely.geometry import Polygon
 
 from pipelines.geometry.normalize import ReviewRequired, normalize
 from pipelines.geometry.schema import (
+    CadReference,
     Finish,
     FinishKey,
     FloorFinish,
@@ -42,6 +43,7 @@ class ElementDraft(Strict):
     name: str | None = Field(default=None, max_length=120)
     style: OpeningStyle | None = None
     finish: FloorFinish | None = None
+    cad: CadReference | None = None  # DWG/DXF provenance (handles, layers, block, reading)
     confirmed: bool = False
 
 
@@ -219,7 +221,11 @@ def validate_draft(value, raw, project_id):
     ox = min(p[0] for p in all_points)
     oy = max(p[1] for p in all_points)
 
-    def evidence(points, note):
+    cad_source = raw["source"].get("format", "pdf") != "pdf"
+
+    def evidence(points, note, cad=None):
+        if cad_source:
+            note = note.replace("sobre el PDF", "sobre el dibujo DWG/DXF")
         return {
             "page": d.page,
             "pdf_coordinates": points,
@@ -228,6 +234,7 @@ def validate_draft(value, raw, project_id):
             else note,
             "status": "inferred" if d.conceptual else "verified",
             "confidence": 0.5 if d.conceptual else 1,
+            **({"cad": cad.model_dump()} if cad else {}),
         }
 
     data = {
@@ -272,6 +279,7 @@ def validate_draft(value, raw, project_id):
             "evidence": evidence(
                 e.polygon,
                 "Contorno y dimensiones revisados y confirmados por el usuario sobre el PDF.",
+                e.cad,
             ),
         }
         if e.kind in ["wall", "slab", "roof"]:

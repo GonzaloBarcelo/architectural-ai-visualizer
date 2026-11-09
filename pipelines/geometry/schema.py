@@ -13,13 +13,26 @@ class Strict(BaseModel):
     model_config = ConfigDict(extra="forbid", allow_inf_nan=False)
 
 
+class CadReference(Strict):
+    """Where a CAD-derived element came from: DXF handles, layers, block and how it was read."""
+
+    handles: list[str] = Field(default_factory=list, max_length=200)
+    layers: list[str] = Field(default_factory=list, max_length=20)
+    block: str | None = Field(default=None, max_length=200)
+    # verified: read directly from the drawing; inferred: resolved by the AI; user: answered in review.
+    reading: Literal["verified", "inferred", "user"] = "verified"
+    detail: str | None = Field(default=None, max_length=300)
+
+
 class Evidence(Strict):
     page: int = Field(ge=1)
     primitive: int | None = None
+    # PDF points for PDF sources; drawing-sheet units (centimetres, y down) for DWG/DXF sources.
     pdf_coordinates: list[Point]
     note: str
     status: Literal["verified", "inferred", "missing"]
     confidence: float = Field(ge=0, le=1)
+    cad: CadReference | None = None
 
 
 class Entity(Strict):
@@ -94,6 +107,9 @@ class Source(Strict):
     filename: str
     sha256: str = Field(pattern=r"^[a-f0-9]{64}$")
     page_count: int = Field(ge=1)
+    format: Literal["pdf", "dwg", "dxf"] = "pdf"
+    # DWG sources only: the local DWG->DXF converter and its version, e.g. "LibreDWG dwg2dxf 0.14".
+    converter: str | None = Field(default=None, max_length=200)
 
 
 FinishKey = Literal[
