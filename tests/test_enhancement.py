@@ -124,6 +124,8 @@ def test_camera_field_of_view_limits_the_listed_openings():
 def test_exterior_and_axonometric_briefs_protect_massing_and_cut_away():
     ext = P.view_brief({"id": "exterior", "label": "Exterior"}, geometry())
     assert "do not add a roof" in ext and "roofline" in ext
+    assert "same size and at exactly the same position" in ext and "no trees" in ext
+    assert "blinds" in P.HARD_CONSTRAINTS and "borders around the image" in P.HARD_CONSTRAINTS
     assert "do not add a roof" not in P.view_brief({"id": "exterior"}, geometry(roofs=[{}]))
     axo = P.view_brief({"id": "axonometric", "label": "Axonometría"}, geometry())
     assert "Light enhancement only" in axo and "cut-away clean" in axo

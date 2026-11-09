@@ -17,7 +17,7 @@ from shapely.geometry import Polygon
 from pipelines.common import ROOT
 from pipelines.postprocess.location import describe
 
-PROMPT_VERSION = "enhance-v1"
+PROMPT_VERSION = "enhance-v2"
 STYLE_PATH = ROOT / "docs/PROMPT_STYLE.md"
 
 KINDS = {
@@ -81,20 +81,23 @@ CLIMATE = {
     "Canary palms, dragon trees, succulents and bougainvillea",
 }
 HARD_CONSTRAINTS = """HARD CONSTRAINTS (highest priority; they override everything above):
-- Keep the exact camera position, lens, perspective, framing and crop of the input image. The
-  result must stay pixel-aligned with the input: every edge where it is now.
+- Keep the exact camera position, lens, perspective, framing and crop of the input image: no
+  zoom, no reframing. The result must stay pixel-aligned with the input: every edge where it is.
 - Keep the geometry exactly: every wall, floor, ceiling line, room proportion and every opening
   (windows, doors) at the same position and size. Do not open, close, widen or move anything.
-- Keep the furniture exactly: same number of pieces, same positions, sizes, outlines and
-  orientation. Restyle their surfaces only. Do not add, remove, move or resize any furniture,
-  rug, lamp or floor plant.
+- Keep the furniture exactly: same number of pieces, same positions, sizes, orientation and the
+  same silhouette and footprint as in the input (e.g. a coffee table keeps its outline and
+  height). Restyle surfaces only. Do not add, remove, move or resize any furniture, rug, lamp or
+  floor plant.
+- Do not add curtains, blinds, shutters or awnings: every window and door outline stays fully
+  visible as in the input.
 - No new walls, windows, doors, columns, beams, niches, steps, mouldings or rooms. Do not add a
   roof or ceiling where the image has none.
-- No people, animals, text, lettering, signage, logos, watermarks or frames."""
+- No people, animals, text, lettering, signage, logos, watermarks, or borders around the image."""
 STRICT = """STRICT RETRY: a previous attempt drifted from the input geometry. This time change
 ONLY materials, textures, lighting and what is seen outside the windows. Trace every line of
-the input image: each edge, corner and silhouette must stay at the same pixel position. When in
-doubt, leave that part exactly as it is."""
+the input image: each edge, corner and furniture silhouette must stay at the same pixel position.
+Add no artwork, objects or plants. When in doubt, leave that part exactly as it is."""
 
 
 def master_style():
@@ -257,9 +260,15 @@ def exterior_brief(geometry):
                 else ""
             ),
             (
-                "The plain studio ground may become a believable ground-level context for the "
-                "location (paving, low garden planting), kept low and in the background, never "
-                "touching, covering or extending the walls."
+                "Keep the building exactly the same size and at exactly the same position in the "
+                "frame: no zoom, crop or change of viewpoint."
+            ),
+            (
+                "Context for the location only through the ground plane: its tone and texture may "
+                "become pale local stone paving or gravel with soft late-afternoon shadows. Nothing "
+                "may stand in front of, overlap or touch the building: no trees, plants, people, "
+                "cars or objects in the foreground; distant low planting only at the outer edges "
+                "of the image, never overlapping the model."
             ),
         ]
     )

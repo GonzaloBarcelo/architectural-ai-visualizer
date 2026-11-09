@@ -26,6 +26,9 @@ WIDTH = 640
 TOLERANCE = 3  # px at WIDTH: ~0.5 % of the image width
 THRESHOLD = 0.62
 MAX_SHIFT = 1.5  # % of the image width, worst tile
+# Phase-correlation peaks weaker than this are not a measurable shift (e.g. a tile where the AI
+# added an artwork). First live run, 10 attempts: real drift 0.13-0.69, spurious peaks <= 0.10.
+RESPONSE_FLOOR = 0.12
 WEIGHTS = {"edge_recall": 0.35, "structure": 0.25, "line_support": 0.25, "mask_recall": 0.15}
 
 FLEXIBLE_PREFIXES = ("gpt-image-2", "chatgpt-image")
@@ -161,7 +164,7 @@ def shifts(a, b, edges=None, grid=3):
             return None
         window = cv2.createHanningWindow(x.shape[::-1], cv2.CV_32F)
         (dx, dy), response = cv2.phaseCorrelate(x, y, window)
-        return None if response < 0.08 else float(np.hypot(dx, dy))
+        return None if response < RESPONSE_FLOOR else float(np.hypot(dx, dy))
 
     overall = shift(ga, gb) or 0.0
     worst = 0.0
