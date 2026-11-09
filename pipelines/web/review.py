@@ -7,7 +7,7 @@ from pydantic import Field, ValidationError
 from shapely.geometry import Polygon
 
 from pipelines.geometry.normalize import ReviewRequired, normalize
-from pipelines.geometry.schema import Geometry, Point, Strict
+from pipelines.geometry.schema import Finish, FinishKey, Geometry, Point, Strict
 
 
 class Calibration(Strict):
@@ -24,7 +24,7 @@ class FloorDraft(Strict):
 
 class ElementDraft(Strict):
     id: str = Field(pattern=r"^[A-Za-z][A-Za-z0-9_-]{0,63}$")
-    kind: Literal["wall", "slab", "room", "door", "window", "roof"]
+    kind: Literal["wall", "slab", "room", "door", "window", "roof", "furniture"]
     polygon: list[Point] = Field(default_factory=list, max_length=200)
     height: float | None = None
     thickness: float | None = None
@@ -38,6 +38,7 @@ class ElementDraft(Strict):
 class Draft(Strict):
     conceptual: bool = False
     assumptions: list[str] = Field(default_factory=list, max_length=100)
+    finishes: dict[FinishKey, Finish] = Field(default_factory=dict)
     page: int = Field(default=1, ge=1)
     title: str = Field(default="Proyecto", max_length=200)
     calibration: Calibration = Field(default_factory=Calibration)
@@ -165,7 +166,9 @@ def validate_draft(value, raw, project_id):
                 prefix + ".polygon",
                 "El contorno está cruzado o no tiene superficie; vuelve a dibujarlo.",
             )
-        if e.kind in ["wall", "door", "window"] and (e.height is None or e.height <= 0):
+        if e.kind in ["wall", "door", "window", "furniture"] and (
+            e.height is None or e.height <= 0
+        ):
             issue(prefix + ".height", "Falta una altura positiva, en metros.")
         if e.kind in ["wall", "slab", "roof"] and (e.thickness is None or e.thickness <= 0):
             issue(prefix + ".thickness", "Falta un espesor positivo, en metros.")
@@ -220,6 +223,7 @@ def validate_draft(value, raw, project_id):
     data = {
         "conceptual": d.conceptual,
         "assumptions": d.assumptions,
+        "finishes": {k: v.model_dump() for k, v in d.finishes.items()},
         "project_id": project_id,
         "title": d.title.strip(),
         "synthetic": raw.get("synthetic_marker", False),
@@ -246,6 +250,7 @@ def validate_draft(value, raw, project_id):
         "walls": [],
         "slabs": [],
         "rooms": [],
+        "furniture": [],
         "roofs": [],
         "openings": [],
     }
@@ -267,6 +272,9 @@ def validate_draft(value, raw, project_id):
             if e.kind == "wall":
                 item["height"] = e.height
             data[{"wall": "walls", "slab": "slabs", "roof": "roofs"}[e.kind]].append(item)
+        elif e.kind == "furniture":
+            item.update(name=e.name or "Mueble conceptual", height=e.height)
+            data["furniture"].append(item)
         elif e.kind == "room":
             item["name"] = e.name
             data["rooms"].append(item)

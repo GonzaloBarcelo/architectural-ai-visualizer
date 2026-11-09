@@ -142,6 +142,22 @@ def check(geometry: Geometry, output: Path, include_renders=True, tolerance_m=0.
                     if op.wall_id == item.id
                 )
                 volume = polygon.area * height - removed
+                # An opening covering the whole footprint (e.g. a door infill host) removes a
+                # full horizontal band; the remaining solid's bounds shrink accordingly.
+                bands = sorted(
+                    (op.sill, op.sill + op.height)
+                    for op in geometry.openings
+                    if op.wall_id == item.id
+                    and Polygon(op.polygon).buffer(tolerance_m).covers(polygon)
+                )
+                low, high = 0.0, height
+                for start, end in bands:
+                    if start <= low + tolerance_m:
+                        low = max(low, end)
+                for start, end in reversed(bands):
+                    if end >= high - tolerance_m:
+                        high = min(high, start)
+                bottom, height = bottom + low, high - low
             elif kind == "opening":
                 bottom, height = walls[item.wall_id].elevation + item.sill, item.height
                 volume = polygon.area * height

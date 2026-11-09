@@ -53,6 +53,12 @@ class Opening(Entity):
     height: float = Field(gt=0)
 
 
+class Furniture(Entity):
+    name: str
+    polygon: list[Point] = Field(min_length=3)
+    height: float = Field(gt=0)
+
+
 class Room(Entity):
     name: str
     polygon: list[Point] = Field(min_length=3)
@@ -84,6 +90,23 @@ class Source(Strict):
     page_count: int = Field(ge=1)
 
 
+FinishKey = Literal["walls", "floor", "doors", "furniture_wood", "upholstery", "ceramic"]
+
+
+class Finish(Strict):
+    """Illustrative render finish derived from the client's description; never a specification."""
+
+    name: str = Field(min_length=1, max_length=80)
+    color: tuple[float, float, float]
+    roughness: float = Field(ge=0, le=1)
+
+    @model_validator(mode="after")
+    def linear_rgb(self):
+        if not all(0 <= c <= 1 for c in self.color):
+            raise ValueError("Finish colours are linear RGB in [0, 1]")
+        return self
+
+
 class Geometry(Strict):
     schema_version: Literal["1.0"] = "1.0"
     project_id: str
@@ -97,12 +120,14 @@ class Geometry(Strict):
     walls: list[Wall] = Field(min_length=1)
     openings: list[Opening] = []
     rooms: list[Room] = []
+    furniture: list[Furniture] = []
     slabs: list[Surface] = Field(min_length=1)
     roofs: list[Surface] = []
     outdoor_areas: list[Surface] = []
     measurements: list[Measurement] = Field(min_length=1)
     missing_information: list[str] = []
     assumptions: list[str] = []
+    finishes: dict[FinishKey, Finish] = {}
 
     @model_validator(mode="after")
     def consistency(self):
@@ -110,6 +135,7 @@ class Geometry(Strict):
             *self.walls,
             *self.openings,
             *self.rooms,
+            *self.furniture,
             *self.slabs,
             *self.roofs,
             *self.outdoor_areas,
@@ -154,6 +180,7 @@ class Geometry(Strict):
             *self.walls,
             *self.openings,
             *self.rooms,
+            *self.furniture,
             *self.slabs,
             *self.roofs,
             *self.outdoor_areas,

@@ -171,12 +171,22 @@ def build(data, output):
         c = bpy.data.collections.new(f["id"] + " / " + f["name"])
         architecture.children.link(c)
         floors[f["id"]] = c
+    sys.path.insert(0, str(Path(__file__).parent))
+    finishes = data.get("finishes") or {}
+
+    def finish(key, name, color, roughness):
+        # Optional client finishes (from the material description) override the defaults.
+        f = finishes.get(key)
+        if f:
+            return material(f"{f['name']} / proposal", tuple(f["color"]), f["roughness"])
+        return material(name, color, roughness)
+
     mats = {
-        "wall": material("Lime plaster", (0.79, 0.77, 0.70), 0.82),
-        "slab": material("Warm limestone", (0.47, 0.44, 0.36), 0.75),
+        "wall": finish("walls", "Lime plaster", (0.79, 0.77, 0.70), 0.82),
+        "slab": finish("floor", "Warm limestone", (0.47, 0.44, 0.36), 0.75),
         "roof": material("Roof mineral", (0.4, 0.4, 0.38)),
         "outdoor": material("Outdoor stone", (0.4, 0.39, 0.34)),
-        "door": material("Oak / visualization finish", (0.29, 0.14, 0.055), 0.42),
+        "door": finish("doors", "Oak / visualization finish", (0.29, 0.14, 0.055), 0.42),
         "window": material("Architectural glass", (0.68, 0.84, 0.87), 0.08, transmission=0.88),
     }
     walls = {}
@@ -221,15 +231,21 @@ def build(data, output):
         bpy.context.view_layer.objects.active = wall
         bpy.ops.object.modifier_apply(modifier=mod.name)
         bpy.data.objects.remove(cutter, do_unlink=True)
+        # Wide door leaves are presented as glazed sliding doors (illustrative, not specified).
+        width = max(e.length for e in edges)
+        glazed = op["kind"] == "door" and width > 1.3
         obj = prism(
             op["id"],
             op["polygon"],
             host["elevation"] + op["sill"],
             op["height"],
             floors[op["floor_id"]],
-            mats[op["kind"]],
+            mats["window" if glazed else op["kind"]],
         )
         tag(obj, op, op["kind"], sha)
+    from furnish import furnish
+
+    furnish(data, floors, prism, material)
     for room in data["rooms"]:
         obj = bpy.data.objects.new(room["id"] + " / " + room["name"], None)
         floors[room["floor_id"]].objects.link(obj)
@@ -255,16 +271,19 @@ def build(data, output):
         extent * 1.55,
     )
     if data["rooms"]:
-        room = data["rooms"][0]
-        xs = [p[0] for p in room["polygon"]]
-        ys = [p[1] for p in room["polygon"]]
-        # Interior cameras supported for rectangular rooms. Camera placement never adds structure.
-        z = next(f["elevation"] for f in data["floors"] if f["id"] == room["floor_id"]) + min(
-            1.5, hi[2] * 0.55
+        from viewpoint import area, best_view
+
+        # Search the most open view inside the largest room; placement never adds structure.
+        room = max(data["rooms"], key=lambda r: area(r["polygon"]))
+        (x, y), angle = best_view(
+            [r["polygon"] for r in data["rooms"] if r["floor_id"] == room["floor_id"]],
+            [w["polygon"] for w in data["walls"] if w["floor_id"] == room["floor_id"]],
+            [f["polygon"] for f in data.get("furniture", []) if f["floor_id"] == room["floor_id"]],
         )
-        pos = (min(xs) + (max(xs) - min(xs)) * 0.18, min(ys) + (max(ys) - min(ys)) * 0.15, z)
-        target = ((min(xs) + max(xs)) * 0.5, max(ys), z * 0.9)
-        camera(scene, "interior", pos, target).data.lens = 20
+        z = next(f["elevation"] for f in data["floors"] if f["id"] == room["floor_id"])
+        eye = z + min(1.5, (hi[2] - z) * 0.55)
+        target = (x + 3 * math.cos(angle), y + 3 * math.sin(angle), eye - 0.25)
+        camera(scene, "interior", (x, y, eye), target).data.lens = 18
     pad = extent * 0.08
     bounds = [lo[0] - pad, lo[1] - pad, hi[0] + pad, hi[1] + pad]
     size = max(bounds[2] - bounds[0], bounds[3] - bounds[1])
@@ -381,7 +400,7 @@ def render_top(scene, output):
 def export_glb(scene, output):
     bpy.ops.object.select_all(action="DESELECT")
     for obj in scene.objects:
-        if "source_id" in obj:
+        if "source_id" in obj or "presentation_id" in obj:
             obj.select_set(True)
     bpy.ops.export_scene.gltf(
         filepath=str(output / "model.raw.glb"),

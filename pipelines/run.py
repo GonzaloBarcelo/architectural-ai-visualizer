@@ -42,7 +42,7 @@ def source_check(g, raw):
     ):
         raise ValueError("Reviewed geometry does not match this PDF SHA-256/page count.")
     t = g.transform
-    for key in ["walls", "openings", "rooms", "slabs", "roofs", "outdoor_areas"]:
+    for key in ["walls", "openings", "rooms", "furniture", "slabs", "roofs", "outdoor_areas"]:
         for item in getattr(g, key):
             if item.evidence.page > g.source.page_count:
                 raise ValueError(f"{item.id}: source page out of range")
@@ -89,6 +89,7 @@ def web_manifest(g, output):
         "bounds": {"min": [lo[0], lo[2], -hi[1]], "max": [hi[0], hi[2], -lo[1]]},
         "source_sha256": g.source.sha256,
         "material_note": "Acabados ilustrativos; geometría procedente del plano.",
+        "finishes": {k: v.model_dump() for k, v in g.finishes.items()},
         "has_roof": bool(g.roofs),
     }
     write_json(output / "manifest.json", manifest)

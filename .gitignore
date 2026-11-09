@@ -17,3 +17,7 @@ site/test-results/
 .tmp/
 
 *.tsbuildinfo
+
+# Client blueprints are private; never commit them.
+blueprints/
+blueprints_test/
