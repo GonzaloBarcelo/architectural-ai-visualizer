@@ -1,3 +1,81 @@
+# DWG input — 2026-11-09 (Claude Code, branch `feature/dwg-input`)
+
+Users can now start a project from a **PDF, DWG or DXF**. A DWG is converted to DXF on this machine and read deterministically with ezdxf. **One** OpenAI call (medium reasoning) answers only the doubts the drawing leaves open, by item id. The existing review, approval, Blender, QA and GLB stages are reused unchanged. The PDF flow is unchanged: all of its tests still pass.
+
+| Area | Implementation | Evidence |
+| --- | --- | --- |
+| Upload | Picker and server accept `.pdf/.dwg/.dxf` up to 50 MiB. The content is checked (`%PDF-`, `AC10xx`, DXF header) and the format is shown | `test_dwg_api.py`: wrong content → 415; DXF read without a converter |
+| Conversion | `pipelines/cad/convert.py`: ODA File Converter preferred, LibreDWG `dwg2dxf` accepted, local only. If neither is installed the UI shows a Spanish error with installation steps | LibreDWG 0.14 installed with Homebrew; converts the AutoCAD 2018 (AC1032) test file in 0.1 s, with warnings about unstable dynamic-block classes |
+| Units | `$INSUNITS`; if missing, inferred from wall thickness, extents and dimensions, and the source is always recorded and shown. Declared units that contradict the drawing stop the reading; ambiguous ones are never guessed | Unit tests: mm, inferred mm, contradictory metres, ambiguous |
+| Plans | Wall geometry is clustered into drawn plans; with several, the user picks one from a numbered overview | `test_several_plans_wait_for_the_users_choice` |
+| Layers | Every layer of the table is inventoried: role, how its name matched (pattern or near spelling, e.g. `a.venatana` → VENTANA), off/frozen state, contents in and outside the plan, and use. Off/frozen and demolition layers are never read. The inventory is shown in the review | Real file: 47 layers listed, 13 with geometry in the plan, all accounted for |
+| Walls | Solid and patterned hatches, closed outlines and line pairs on wall layers, kept only if thinner than 0.6 m. Snapped to 0.1 mm and split into convex pieces (no ring walls, no sliver triangles) | Real file: 41 wall pieces from `a.secció` and `a.sombrea sección` |
+| Openings | Gaps between facing wall ends with free space on both faces. Kind from block or layer names, swing side from the arc, stacked gaps merged. Unnamed carpentry in a gap becomes a doubt | Real file: 3 doors named (`BB - Puerta Dinamica 1 HOJA`), 8 unnamed window blocks and 3 carpentry gaps sent as doubts |
+| Furniture | Block inserts, with dynamic `*U` blocks resolved to their source name and hidden visibility states skipped. Footprint in the insert frame, front from rotation and mirroring. The back is checked against the walls by the kind's side rule. Bed and sofa blocks that also draw nightstands, a rug or a table are split into pieces; an L-sofa becomes modules facing into the L | Unit tests for rotation, mirroring, corner wardrobes and composites |
+| Rooms | Spaces enclosed by walls and kept openings, named by the TEXT/MTEXT inside. Floor finish from hatch pattern (`ANSI37` → tile; unknown patterns asked) | Real file: 6 rooms, 5 named from the drawing and 1 by the AI ("Vestidor") |
+| Doubts → AI | Compact JSON of unresolved items plus a labelled 1024 px plan image. Strict `responses.parse` schema with answers by id, `effort=medium`, `store=False`, cached by model, prompt version and payload hash, audited in `ai-audit/`. No doubts → no call. Missing key or failure → items stay pending and approval is blocked until the user answers them | `test_dwg_ai.py`: zero calls without doubts, AI failure, missing key, cache hit, ids only, user answers |
+| Review | DWG rendered locally on the left; the interpretation on the right with front arrows and pending items in red. The panel shows source, converter, SHA-256, units and their source, AI tokens, cost and time, and the verified / AI / user / pending lists with handles and layers | Live UI data checked through the API |
+| Provenance | `Source.format/converter` and `Evidence.cad` (handles, layers, block, reading: verified/inferred/user). `pipelines.run` re-hashes the DWG; run status, provenance and manifest record format, hash and converter | Live `run-status.json` and `manifest.json` below |
+| Viewer | HTML is served with `no-cache` and the lazy 3D viewer reloads once if a rebuild replaced its chunk. This fixes "Failed to fetch dynamically imported module …/Viewer-*.js" | `test_html_is_never_cached_but_assets_may_be`. The user's open page was kept working by serving the previous chunk too |
+
+## Live verification — the test DWG in `dwg_test/` (real client drawing, not in Git)
+
+Final run with the final code: project `035d40f6f142497db122c81d7dd0a8e0`, gpt-5.4 with a real key on the user's server (127.0.0.1:5174).
+
+- **Converter:** LibreDWG dwg2dxf 0.14. ODA File Converter is not installed on this machine.
+- **Units:** metres from `$INSUNITS = 6`. The plan is 9.70 × 10.17 m; the deterministic reading takes 0.44 s.
+- **Readings** (verified from the DWG / inferred by the AI / missing):
+
+  | Element | Verified | Inferred | Missing |
+  | --- | --- | --- | --- |
+  | Wall pieces | 41 | 0 | 0 |
+  | Doors | 3 | 4 (2 sliding bathroom doors, 2 glazed balcony and gallery doors) | 0 |
+  | Windows | 0 | 4 | 0 |
+  | Rooms | 5 | 1 | 0 |
+  | Furniture items | 6 (2 beds, 2 wardrobes, 2 sofa modules) | 34 classifications | 0 |
+
+  The furniture classifications place 27 pieces and mark 7 as not furniture (hob, sink, two pillars, two low walls, one block outside the plan). 33 pieces are placed in total. The shower screen gap was answered "not an opening".
+- **Doubts sent (47):**
+  - 34 blocks or block pieces;
+  - 9 carpentry gaps;
+  - 2 unnamed rooms;
+  - 1 layer (`a.projecció`, answered: not walls);
+  - 1 hatch pattern (`ANSI31`, answered: wood).
+
+  All answers are recorded in `cad-reading.json`. Each one checked against the drawing looks right: showers, toilets, basins and wardrobes with fronts away from their walls; kitchen modules with the hob and sink folded into the counter; fridge; peninsula with stools; dining set; nightstands, rug and coffee table from the composite blocks.
+- **AI cost and time:** 1 call, 8,122 input + 8,279 output tokens (7,187 reasoning), **$0.145** at $2.50 / $15.00 per 1M tokens. The call took 120 s and upload to review took **126 s**. The PDF baseline is about $1.19 and about 20 min (1,141 s) per interpretation.
+- **Generation:** approval to delivery in 372 s at 1600 px / 160 samples.
+  - **QA 477/477.**
+  - Renders: exterior, axonometric, and interiors of the living-dining-kitchen, Habitación 02, Habitación 01 and Baño 01.
+  - GLB: 478 KB, served with HTTP 200.
+  - `run-status.json`: `source_format: dwg`, SHA-256 `46053497…`, `converter: LibreDWG dwg2dxf 0.14`.
+- **Visual inspection:** walls, openings and orientation match the plan. Beds have their headboards on the east walls with a nightstand and lamp each side; the L-sofa sits on its rug with the coffee table; the balcony and gallery have glazed doors; the entrance door is on the east party wall.
+
+Earlier live attempts on the same file, each of which led to a fix:
+
+| Attempt | Tokens | Cost | Call time | What it showed |
+| --- | --- | --- | --- | --- |
+| No image | 6.2k in / 10.7k out | $0.177 | 199 s | Balcony read as a window |
+| With image | 7.4k in / 10.8k out | $0.180 | 188 s | Balcony and gallery correctly read as glazed doors, so the image became the default |
+| After the wall snap changed the payload | 7.2k in / 12.5k out | $0.205 | 212 s | — |
+
+- **Blender gate:** one preview QA failed 231/233 with sliver cap triangles on two complex walls. The fix was convex wall pieces; QA tolerances were not changed.
+- **Composite blocks:** one complete run (477/477) still showed a 2.0 m bed (nightstands included) and a 2.4 × 2.7 m sofa (rug included). This is now fixed.
+- **Total live AI spend in this session:** about $0.71.
+
+## Not done / limits
+
+- Tested on **one** real DWG with LibreDWG only. ODA File Converter (the preferred converter) is supported in code but untested here. LibreDWG warns about unstable dynamic-block classes on AutoCAD 2018 files.
+- The model's answers vary between runs on secondary details (sliding vs casement windows; once the free-standing L-sofa's front). The deterministic reading does not vary.
+- The labelled image is on by default because it fixed two openings on this one drawing (+1.2k input tokens). That is a sample of one.
+- The `a.venatana` and `a.ventana` lines are read with a window role but end up unused: they are outer frame lines and room outlines, and the windows themselves come from the blocks in the wall gaps.
+- The distributor and the living room form one room, because they are separated only by a carpentry screen with no wall gap; this is noted in the review. The balcony and gallery are outside the walls and are not modelled; their washing machine is dropped.
+- Heights (2.70 m walls, 2.10/2.20 m doors, 1.20 m windows on 0.90 m sills) and the 0.20 m slab remain assumptions listed in the review. DWG attributes for heights are not read yet.
+- Only one floor per project, and the plan must be orthogonal enough for gap detection (rotated walls are supported in code, not live-tested).
+- Validation: Python 112 passed (80 pre-existing + 32 new), Ruff check and format clean, Node 2 passed, TypeScript/Vite build passed. No push, no deployment.
+
+---
+
 # Fidelity iteration — 2026-11-09 (Claude Code)
 
 Goal: read the blueprint much more closely (walls, openings, furniture, bathrooms), orient

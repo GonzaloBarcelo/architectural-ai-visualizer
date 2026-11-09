@@ -2,8 +2,13 @@
 
 ```mermaid
 flowchart TD
-    U[Web upload PDF] --> A[Local FastAPI / private project storage]
+    U[Web upload PDF / DWG / DXF] --> A[Local FastAPI / private project storage]
     A --> B[PyMuPDF: vectors, text, annotations]
+    A --> K[DWG→DXF locally: ODA / LibreDWG, then ezdxf: layers, blocks, inserts, texts, hatches]
+    K --> KD{Doubts left?}
+    KD -- yes --> KA[ONE OpenAI call: answers by item id only]
+    KD -- no --> R
+    KA --> R
     A --> C[OpenCV: raster candidates]
     A -. explicit vision flag .-> V[OpenAI: unverified semantic proposals]
     B --> D{Verified scale, heights and entities?}
@@ -27,11 +32,29 @@ flowchart TD
 
 ## Authoritative source
 
+**Decision: the uploaded source drawing (PDF or DWG/DXF) is authoritative.** It replaces "the PDF is authoritative". The reason is unchanged: geometry must come from what the architect drew, never from a model's guess. A DWG holds that drawing more precisely than a PDF export does: true coordinates in declared units, named layers, block references with insertion point, rotation and mirroring, and handles that make every element traceable. So the DWG gets the same authority and the same rules. Dimensions are never invented. Units are taken from `$INSUNITS` or inferred, and the inference is always recorded and shown. Whatever the drawing does not settle stops at review as *missing*. Verified (read from the drawing), inferred (resolved by the AI) and user-answered readings are kept apart down to the Geometry evidence. Provenance is the PDF page and coordinates, or for CAD the DXF handles, layers, block name, converter and version, and the file's SHA-256.
+
 `pipelines/pdf/extract.py` records the PDF SHA-256, all pages, text blocks and dimensions, vector paths (including curves), annotations and rasterized evidence. OpenCV Canny/Hough produces line candidates for scans. Raster candidates have no verified scale or architectural semantics. Extraction limits files to 50 MiB and 50 pages and rejects encrypted/oversized pages.
 
 `normalize.py` supports the explicitly annotated synthetic test convention. Each label must match one actual drawn rectangle, and the visible 10 m calibration must agree with the printed 1:50 scale. No fixture dimensions are imported into the parser. Other drawings stop at `ReviewRequired` and can enter modeling only through human-reviewed geometry.
 
 `vision.py` uses Responses structured parsing, PDF file input and `store=False`. It runs only with `--vision`. The content is treated as data, and all responses remain inferred observations. A missing key is actionable; there is no fake API fallback.
+
+## DWG / DXF source
+
+`pipelines/cad/convert.py` converts a DWG on this machine: ODA File Converter is preferred and LibreDWG `dwg2dxf` is accepted. It never uses a cloud converter. A DXF is read directly. `pipelines/cad/read.py` reads model space only with ezdxf; layouts and paper space are ignored, and title blocks are excluded by position.
+
+- **Plans.** Wall geometry is clustered into separate drawn plans. If there are several, the user picks one.
+- **Walls.** Cut hatches, closed outlines and parallel line pairs on wall layers, kept only if thinner than 0.6 m. Floor hatches on the same layers are wider and so are excluded.
+- **Openings.** Gaps between facing wall ends with free space on both faces, so niches are excluded. The kind comes from door/window block or layer names. The hinge side comes from the arc. Stacked gaps from stepped jambs are merged.
+- **Furniture.** Block inserts, with dynamic-block names resolved. The footprint is the visible geometry in the insert frame. The back is checked against the walls with the side rule of each kind.
+- **Rooms.** Spaces enclosed by walls and openings, named by the TEXT/MTEXT inside them. Finishes come from hatch patterns.
+
+Naming conventions are in `pipelines/cad/config.py`. Layer names match by pattern or by near spelling, and the match is recorded. Every layer of the drawing is inventoried and shown in the review: its role, how it matched, whether it is off or frozen, its contents and its use. Off, frozen and demolition layers are never read. Bed and sofa blocks that also draw nightstands, a rug or a table are split into their drawn pieces; an L-sofa becomes modules facing into the L, and the extra pieces are classified by the AI.
+
+`pipelines/web/dwg.py` sends only the unresolved items: unknown blocks, unclear fronts, unnamed carpentry in a gap, orphan openings, unnamed rooms, layers that may be walls, and unknown hatch patterns. They go as compact JSON plus a labelled 1024 px image of the plan, in **one** `responses.parse` call. The call uses a strict schema whose answers reference item ids only, `reasoning.effort = "medium"` and `store=False`. It is cached by model, prompt version and payload hash, and audited in `ai-audit/`. If there are no doubts, no call is made. If the key is missing or the call fails, the deterministic reading is kept and the items stay pending for the user. Approval is blocked while blocking items are pending.
+
+The review sheet is the plan rendered locally, in centimetres with y down, so the existing review UI and `validate_draft` work unchanged. `Source.format`/`converter` and `Evidence.cad` (`CadReference`) carry the provenance into `Geometry`, the run status, provenance and the manifest. `pipelines.run` re-hashes the DWG before Blender runs.
 
 ## Typed geometry v1
 

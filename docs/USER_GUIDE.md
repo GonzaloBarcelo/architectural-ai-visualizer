@@ -1,3 +1,49 @@
+# Planos DWG / DXF
+
+Además del PDF, puedes subir el plano en **DWG** (AutoCAD) o **DXF**. El dibujo se lee en este equipo. La IA solo recibe un resumen breve de lo que el programa no ha podido resolver solo, sin el archivo: una lista en texto y una imagen pequeña del plano con números. La lectura tarda unos segundos y la consulta a la IA 3–4 minutos (unos 0,20 $).
+
+1. **Sube el plano.** Elige el `.dwg` o `.dxf` (máx. 50 MB). Verás el formato junto al nombre. La descripción de materiales funciona igual que con PDF.
+2. **Elige la planta** si el dibujo contiene varias. El programa muestra una vista numerada de todas.
+3. **Revisa.** A la izquierda tienes el dibujo DWG tal como está en el archivo; a la derecha, la interpretación. Debajo, el panel «Lectura del DWG» muestra:
+   - la fuente, el conversor y su versión, y la huella SHA-256 del archivo;
+   - las unidades, y si se leyeron del archivo (`$INSUNITS`) o se dedujeron;
+   - las fichas de la IA: tokens de entrada y salida y coste estimado.
+
+   Las lecturas aparecen separadas en cuatro grupos:
+   - **Leído del DWG**: tomado directamente de capas, bloques y textos.
+   - **Resuelto por la IA**: dudas que ha contestado la IA.
+   - **Indicado por ti**: lo que has respondido tú.
+   - **Pendiente**: lo que nadie ha resuelto todavía. Aparece en rojo sobre el plano.
+
+   Mientras quede algo pendiente, no se puede aprobar. Elige la respuesta en cada punto y pulsa **Aplicar respuestas** (no gasta tokens). «No es mobiliario» y «Sin hueco» sirven para descartar un elemento.
+4. **Aprueba y genera** como con el PDF.
+
+## Instalar el conversor DWG → DXF
+
+DWG es un formato cerrado; el programa lo convierte a DXF en este equipo, nunca en la nube.
+
+- **ODA File Converter** (recomendado, gratuito): descárgalo de opendesign.com (*ODA File Converter*) e instálalo en `/Applications`. En Linux necesita un entorno gráfico o `xvfb-run`. Si está en otra ruta, indica `ODA_FILE_CONVERTER=/ruta/ODAFileConverter` al arrancar el servidor.
+- **LibreDWG** (alternativa, código abierto): `brew install libredwg` en macOS, o `apt install libredwg-tools` en Linux. Lee bien hasta AutoCAD 2018, aunque avisa de algunos objetos dinámicos. Ruta propia: `DWG2DXF=/ruta/dwg2dxf`.
+
+El programa usa ODA si está instalado y, si no, LibreDWG. Si falta un conversor, la web lo dice. También puedes exportar el DXF desde tu programa de CAD y subirlo directamente.
+
+## Cómo preparar el DWG para la mejor lectura
+
+- **Unidades:** define `UNITS`/`$INSUNITS` (mm, cm o m). Si no están definidas, se deducen del grosor de los muros, del tamaño y de las cotas, y se avisa. Si las declaradas no encajan con el dibujo, el plano se rechaza.
+- **Espacio modelo:** se lee solo el espacio modelo, nunca las presentaciones. El cajetín y los rótulos lejanos quedan fuera porque se mira solo la planta. Si hay varias plantas dibujadas, se te pregunta cuál usar.
+- **Capas:** se leen todas, también las apagadas, que se listan pero no se usan. El nombre se compara sin acentos ni mayúsculas, y se admiten erratas cercanas: `a.venatana` se lee como ventanas y se indica en la lista de capas. Nombres que funcionan:
+  - Muros: `MUROS`, `TABIQUES`, `A-WALL`, `CERRAMIENTO`, `FABRICA`, «sección»/`a.secció` (muros cortados), `PILARES`. Mejor con sombreado sólido o polilíneas cerradas; también sirven pares de líneas paralelas.
+  - Puertas: `PUERTAS`, `A-DOOR`. Ventanas: `VENTANAS`, `A-GLAZ`. Carpintería sin distinguir: `CARPINTERIA`.
+  - Mobiliario: `MOBILIARIO`, `MUEBLES`, `a.moble`/`a.mobles`, `A-FURN`, `SANITARIOS`.
+  - Ignoradas: cotas, `DIM`, `HABITABILIDAD`, cajetín, ejes y `DEMOLICION`. Los textos del cajetín dentro de la planta sí nombran estancias.
+- **Bloques:** el nombre decide el tipo cuando es claro: `CAMA`/`LLIT`, `INODORO`/`WC`, `LAVABO`, `DUCHA`, `BAÑERA`, `SOFA`, `MESA`, `SILLA`, `ARMARIO`/`ARMARI`, `COCINA`/`ENCIMERA`, `NEVERA`, `LAVADORA`, `PUERTA`, `VENTANA` (la lista completa está en `pipelines/cad/config.py`). Los nombres sin significado (`A$C…`, bloques dinámicos `*U…`) se consultan a la IA. Para orientar las piezas se usan el giro y la simetría de la inserción. Además se comprueba que el respaldo apoye en un muro: el cabecero de la cama, la trasera del armario.
+- **Huecos:** una puerta o ventana se reconoce por el hueco entre dos extremos de muro y la carpintería que hay dentro. Con un arco de giro dibujado, es abatible. Una carpintería sin hueco en el muro (una mampara, por ejemplo) no se modela y se avisa.
+- **Estancias:** se nombran con el TEXT/MTEXT que hay dentro de cada recinto cerrado. El pavimento sale del rayado (`ANSI37`/`NET` → baldosa). Los rayados desconocidos se consultan a la IA o quedan «desconocido».
+
+Los archivos se guardan en `outputs/web-projects/<id>/`, junto con el DXF convertido, el registro de conversión, la lectura (`cad-reading.json`) y la auditoría de la IA (`ai-audit/`). Nada de esto entra en Git. Variables opcionales del servidor: `AAV_DWG_IMAGE=0` quita la imagen de la consulta y `OPENAI_MODEL` cambia el modelo.
+
+---
+
 # Guía rápida — González Cardona (MVP)
 
 1. **Sube el plano.** Abre http://127.0.0.1:5174/, elige el PDF (una planta, escala impresa como 1:50) y, si quieres, describe materiales: *“suelo de roble natural, paredes blanco roto, muebles de nogal, sofá de lino gris”*. Pulsa **Interpretar plano**. El PDF se envía a OpenAI.
