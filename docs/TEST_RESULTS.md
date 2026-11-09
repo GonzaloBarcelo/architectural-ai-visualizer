@@ -1,3 +1,13 @@
+# Real PDF conceptual run — 2026-11-09
+
+EA_01_MOD.pdf received two live OpenAI responses. First call used 5,284 tokens; second, vector-anchored call used 9,213 tokens. Both failed review: incorrect geometry, units and scale. They are NOT successful automatic reconstruction evidence.
+
+A separately identified assisted correction used filled vector polygons from the PDF, a printed 1:50 scale cross-checked against the 3.36 m dimension, 2.7 m assumed wall height, and an approximate slab. It retained facade gaps without modeling lintels, sills or joinery; balcony boundaries and interior camera region are conceptual. No claim of complete room reconstruction or architectural accuracy.
+
+Real Blender run 2066bd98e6994019a2092a8f4f35b418 succeeded: 383 QA checks, three renders, GLB with 53 meshes/1,404 vertices, Khronos 0 errors/0 warnings and successful Three.js load. QA verifies consistency with the corrected input, not fidelity of OpenAI interpretation. Private source/results remain excluded from Git. The original AI response is preserved separately from edited geometry and can be compared in the browser. No deployment.
+
+---
+
 # Web workflow verification — 2026-11-09
 
 **PASS**: upload PDF in the actual browser → review scale/floor/elements → validate → generate with real Blender → load newly generated renders and GLB in the same page. No deployment or publication.
