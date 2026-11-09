@@ -162,7 +162,18 @@ class Projects:
         for path in self.root.glob("*/project.json"):
             try:
                 value = json.loads(path.read_text())
-                if value.get("status") in BUSY:
+                delivered = value.get("result") and (
+                    value.get("result_revision") == value.get("revision")
+                )
+                if value.get("stage") == "enhancing" and delivered:
+                    # Only «Mejorar de nuevo» was running: the delivered renders stay valid.
+                    value.update(
+                        status="succeeded",
+                        stage="completed",
+                        error="La mejora con IA se interrumpió; se muestran los renders entregados.",
+                    )
+                    self.save(value)
+                elif value.get("status") in BUSY:
                     value.update(
                         status="failed",
                         stage="interrupted",

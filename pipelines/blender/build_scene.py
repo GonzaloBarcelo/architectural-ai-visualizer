@@ -636,8 +636,13 @@ def view_record(cam):
 
 MASK_CLASSES = {
     # Red: built structure; green: openings and joinery; blue: furniture. Others stay black.
-    "wall": (1, 0, 0), "slab": (1, 0, 0), "roof": (1, 0, 0), "floor_finish": (1, 0, 0),
-    "door": (0, 1, 0), "window": (0, 1, 0), "joinery": (0, 1, 0),
+    "wall": (1, 0, 0),
+    "slab": (1, 0, 0),
+    "roof": (1, 0, 0),
+    "floor_finish": (1, 0, 0),
+    "door": (0, 1, 0),
+    "window": (0, 1, 0),
+    "joinery": (0, 1, 0),
     "furniture": (0, 0, 1),
 }
 

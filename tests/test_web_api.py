@@ -307,6 +307,27 @@ def test_interrupted_job_is_recoverable_on_restart(setup_paths, pdf):
         assert wait_project(c, project["id"], ("succeeded",))["status"] == "succeeded"
 
 
+def test_interrupted_enhancement_rerun_keeps_the_delivered_renders(setup_paths, pdf):
+    data, site = setup_paths
+    with TestClient(
+        create_app(data, site, pipeline_runner=successful_runner), base_url=BASE_URL
+    ) as c:
+        project = approve(c, upload(c, pdf))
+        route = f"/api/projects/{project['id']}"
+        assert (
+            c.post(route + "/generate", json={"revision": project["revision"]}).status_code == 202
+        )
+        wait_project(c, project["id"], ("succeeded",))
+        c.app.state.projects.update(project["id"], status="running", stage="enhancing")
+    with TestClient(
+        create_app(data, site, pipeline_runner=successful_runner), base_url=BASE_URL
+    ) as c:
+        recovered = c.get(route).json()
+        assert recovered["status"] == "succeeded" and recovered["stage"] == "completed"
+        assert "interrumpió" in recovered["error"]
+        assert c.get(route + "/files/model.glb").status_code == 200
+
+
 def ai_draft(raw):
     from pipelines.web.review import draft_from_extraction
 
