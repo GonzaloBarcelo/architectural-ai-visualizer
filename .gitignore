@@ -21,3 +21,6 @@ site/test-results/
 # Client blueprints are private; never commit them.
 blueprints/
 blueprints_test/
+
+# Client CAD drawings used for live verification; never commit them or anything derived.
+dwg_test/
