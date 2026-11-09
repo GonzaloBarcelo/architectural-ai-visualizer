@@ -1,3 +1,102 @@
+# AI enhancement of renders — 2026-11-09 (Claude Code, branch feature/ai-enhancement)
+
+After the Blender renders pass QA and the delivery is in place, each render is sent to the
+OpenAI image-edit API for an **illustrative** photorealistic enhancement. Originals are always
+delivered; the enhancement never feeds back into geometry, dimensions or the GLB.
+
+| Area | Implementation | Evidence |
+| --- | --- | --- |
+| Model | `gpt-image-2.5-sunburst` (`OPENAI_IMAGE_MODEL`), `quality=high`, `output_format=png`, `n=1`. Checked in the official docs on 2026-11-09: described as "our most capable model for image generation and editing"; the gpt-image-2 family always processes inputs at high fidelity, so `input_fidelity` is omitted (sent only to gpt-image-1.5). Sizes: any WxH multiple of 16, 655,360–8,294,400 px, ratio ≤ 3:1 | 20 live calls, all HTTP 200 |
+| Size | 1600×1200 renders are sent as-is (valid custom size). Other sizes are scaled uniformly and mirror-padded to a valid canvas, then cropped back; fixed-size models use the closest of 1024², 1536×1024, 1024×1536. Never stretched | Pixel-exact pad/crop round-trip tests; live outputs returned 1600×1200, no resampling |
+| Location | `postprocess/location.py`: labelled title-block address (Dirección/Emplazamiento/Situación…), address lines, street labels on the plan, filename (`MAD_…`). DXF: TEXT/MTEXT/ATTRIB of every layer and layout, with handle. Region/country/latitude/climate derived from the postal code and marked as derived. Missing → user field; fallback «residencia mediterránea en España» only if left empty | EA_01_MOD_1: «C/ Juan Pascual de Mena, 26, 1ºA, Madrid (28011)», page 1 text block 50, confidence 0.95, verified |
+| Prompt | `postprocess/prompt.py`, `PROMPT_VERSION=enhance-v2`: master style verbatim (SHA-256 in the manifest), location block (latitude light, climate, vegetation, view through windows), per-view brief from the approved geometry (room type, its furniture only, floor finish, openings in the camera's field of view), client materials, precedence (geometry > client materials > master style), hard constraints last; strict variant for the retry | Unit tests |
+| Fidelity | `postprocess/fidelity.py`: Canny edge recall, SSIM structure term, long-line support, Blender class-mask silhouettes (new `masks/<view>.png`), worst 3×3 tile phase-correlation shift. Pass: score ≥ 0.62 and tile shift ≤ 1.5 % (peaks < 0.12 ignored). Fail → one strict retry → original kept, «mejora rechazada: deriva geométrica» | Calibration below |
+| Calls | 3 concurrent views, 300 s timeout, one retry for transient errors; cache `ai-cache/enhance-<sha256(model, prompt version, style hash, quality, size, prompt, image)>.png`; audit per attempt in `ai-audit/enhance-*.json` (model, prompt, size, timings, usage, cost, fidelity). The key is never logged | Mock tests: cache hit, concurrency peak 3, API failure and drift keep originals |
+| Pipeline | Stage `enhancing` after export (originals already delivered; failures never fail the run). Per-project checkbox at approval, `AAV_ENHANCE=0` server switch. `POST /enhance` («Mejorar de nuevo») and `python -m pipelines.postprocess.enhance <project>` rerun only this step. Manifest: `url` + `enhanced_url` and per-view `enhancement`; site packages strip enhanced images | API test; CLI live run |
+| UI | Enhanced image by default, Original / Mejorada con IA toggle, «Imagen mejorada con IA · ilustrativa», both downloads, fidelity per view, Spanish notices; review shows the detected location (editable) and the option; per-image progress; AI usage line with enhancement cost and time | Headless Chrome screenshots of the test server (toggle and label verified by clicking) |
+
+## Live results — project 36a71a6c (EA_01_MOD_1.pdf, 6 renders at 1600×1200)
+
+Prices (2026-11-09, per 1M tokens): text in $5, image in $8, image out $30. Each call reported
+≈1,450 image + 1,430–1,640 text input tokens and 1,694 image output tokens: **≈ $0.070 per call,
+27–36 s per call**.
+
+**Run 1 — CLI, prompt v1** (`python -m pipelines.postprocess.enhance …36a71a6c…`): 10 calls,
+**$0.70, 129 s**, 4 accepted / 2 rejected.
+
+| View | Attempts (score, worst tile shift) | Result | Visual inspection |
+| --- | --- | --- | --- |
+| Exterior | 0.40 / 6.6 % → strict 0.43 / 12.8 % | rejected | Camera zoomed in on the model, olive trees added in the foreground: real drift |
+| Axonometric | 0.90 / 0.3 % | accepted | Same model and furniture; warmer materials, sunlight |
+| Salón - Comedor - Cocina | 0.74 / 2.1 % → strict 0.82 / 3.2 % | rejected | Kitchen, doors, sofa, chair aligned; coffee table moved ~3 % and got a taller plinth; large artwork added |
+| Habitación 02 | 0.71 / 2.1 % → strict 0.80 / 1.1 % | accepted | First try added roman blinds over the windows (rejected); retry aligned, Madrid street through the windows |
+| Habitación 01 | 0.44 / 1.8 % → strict 0.79 / 0.6 % | accepted | First try reframed the camera (rejected); retry aligned |
+| Baño 02 | 0.95 / 0.1 % | accepted | Geometry intact; travertine shower wall, one framed artwork and a small plant added |
+
+Tuning from run 1 (prompt v2): exterior keeps its size and position in the frame and gets
+context only on the ground plane, nothing in front of the model; no curtains/blinds; furniture
+keeps its silhouette and footprint; removed the contradiction between "no frames" and the
+allowed framed artwork. The tile-shift check ignores correlation peaks below 0.12 (spurious
+peaks from added artwork reached 0.08–0.10; real drift was 0.13–0.69).
+
+**Run 2 — «Mejorar de nuevo» through the test server, prompt v2, same renders** (copy of the
+project in an isolated data dir): 10 calls, **$0.71, 119 s**, 5 accepted / 1 rejected.
+
+| View | Attempts (score, worst tile shift) | Result |
+| --- | --- | --- |
+| Exterior | 0.49 / 6.3 % → strict 0.40 / 9.4 % | rejected: still enlarges the model to fill the frame (no more foreground trees; paving only) |
+| Axonometric | 0.86 / 1.0 % | accepted |
+| Salón - Comedor - Cocina | 0.82 / 3.7 % → strict 0.88 / 0.9 % | accepted; first try reshaped the sofa and added a large artwork |
+| Habitación 02 | 0.82 / 1.1 % | accepted on the first try |
+| Habitación 01 | 0.43 / 1.9 % → strict 0.78 / 0.4 % | accepted |
+| Baño 02 | 0.72 / 3.7 % → strict 0.95 / 0.0 % | accepted; first try zoomed in on the vanity |
+
+Calibration over the 20 live attempts: visually clean results scored 0.78–0.95 with worst tile
+shift ≤ 1.1 %; every attempt with visible reframing or moved furniture had a tile shift ≥ 1.8 %
+or a score ≤ 0.49. Thresholds kept at 0.62 / 1.5 %. Synthetic: recolour/texture 0.94–0.98,
+2 % shift ≈ 0.45.
+
+**Run 3 — full new project through the server, prompt v2** (test server from this branch on
+127.0.0.1:5181 with its own data dir; EA_01_MOD_1.pdf with the same material description):
+upload → interpretation from the AI cache (0 new tokens) → location detected (same title-block
+address, verified, 0.95) → approve with «Mejorar renders con IA» on → Blender 1600 px / 160
+samples **427 s**, final QA **539/539**, GLB exported → enhancement **95 s, 9 calls, $0.63**, 5
+accepted / 1 rejected → succeeded; approve-to-completed 527 s. The first attempt of this run
+stopped at GLB optimization because the isolated test worktree had no `site/node_modules`
+(environment, not the feature); originals were not delivered, so enhancement correctly did not
+start. After linking the dependencies the retry passed. Class masks were rendered for all 6 views
+and used (`mask_recall` 0.55–1.0).
+
+| View | Attempts (score, worst tile shift) | Result | Visual inspection |
+| --- | --- | --- | --- |
+| Exterior | 0.45 / 7.9 % → strict 0.44 / 5.5 % | rejected | Model enlarged in the frame again (paving only, no trees) |
+| Axonometric | 0.93 / 0.6 % | accepted | Aligned |
+| Salón - Comedor - Cocina | 0.69 / 2.1 % → strict 0.92 / 0.3 % | accepted | Aligned; foreground chair re-upholstered |
+| Habitación 02 | 0.73 / 3.2 % → strict 0.86 / 1.3 % | accepted | First try off by 3 % with an added artwork; retry aligned |
+| Habitación 01 | 0.69 / 1.0 % | accepted | Window, headboard, lamps and nightstand within a few pixels; large artwork added on the left wall |
+| Baño 02 | 0.87 / 1.4 % | accepted | Aligned; artwork, plant and towel added |
+
+**Totals across the three live runs:** 29 calls, $2.04. Added per project: ≈ $0.63–0.71 and
+95–129 s with 3 concurrent calls (Blender itself: ≈ 7 min at 1600 px / 160 samples).
+Validation on the branch: 141 Python tests passed (30 new), Ruff clean, TypeScript/Vite build
+and 2 Node tests passed; no new Python dependencies (OpenCV/NumPy were already locked).
+
+## Known limits
+
+- The exterior view (a roofless cut-away of the apartment on a studio ground) was rejected in
+  all four attempts: the model keeps enlarging the building. The original is shown, as designed.
+- Accepted images still add allowed small items (one artwork, a plant, cushions, throws) and
+  invent the view through the windows; cushion and bedding shapes change. The fidelity check
+  measures structure, not every pixel: images must be reviewed before they go to a client.
+- The strict retry is needed often (3–4 of 6 views per run), so a project costs about
+  $0.60–0.75 and adds about 1.5–2.5 minutes with 3 concurrent calls.
+- Only one real blueprint (EA_01_MOD_1) was tested. The location of DWG projects is read from
+  every text entity but was only tested with synthetic DXF files.
+- `complexity` is left at the model default; lower values may reduce reframing but were not
+  tested.
+
+---
+
 # DWG input — 2026-11-09 (Claude Code, branch `feature/dwg-input`)
 
 Users can now start a project from a **PDF, DWG or DXF**. A DWG is converted to DXF on this machine and read deterministically with ezdxf. **One** OpenAI call (medium reasoning) answers only the doubts the drawing leaves open, by item id. The existing review, approval, Blender, QA and GLB stages are reused unchanged. The PDF flow is unchanged: all of its tests still pass.

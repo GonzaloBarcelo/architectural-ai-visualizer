@@ -58,6 +58,35 @@ La interpretación hace tres llamadas a OpenAI con razonamiento alto (muros y hu
 
 ---
 
+# Mejora de los renders con IA (ilustrativa)
+
+Tras los renders de Blender y sus comprobaciones, cada imagen se envía a la API de edición de imágenes de OpenAI para darle acabado fotorrealista. **Es una imagen ilustrativa**: no modifica el plano, las medidas, la geometría ni el modelo 3D (GLB), que siguen saliendo solo del plano.
+
+- **Galería.** Se muestra la versión mejorada por defecto, con la etiqueta «Imagen mejorada con IA · ilustrativa» y el conmutador **Original / Mejorada con IA** en cada imagen. Puedes descargar las dos versiones. Junto a cada vista aparece su **fidelidad geométrica** (0–1).
+- **Revisión (paso 2).** Junto a «Aprobar y generar renders» verás la **ubicación del proyecto** leída del plano (cajetín: «Dirección», «Emplazamiento», «Situación»…; o calles rotuladas; o el nombre del archivo, p. ej. `MAD_…` = Madrid) con su origen y confianza. Puedes corregirla. Si no se encuentra y la dejas vacía, se usa «residencia mediterránea en España»; nunca se inventa una dirección. La ubicación solo orienta la luz, el clima, la vegetación y lo que se ve por las ventanas; nunca cambia el edificio.
+- **Activar o no.** La casilla **Mejorar renders con IA** (activada por defecto) decide si se mejora ese proyecto. En el servidor, `AAV_ENHANCE=0` la desactiva para todos.
+- **Mejorar de nuevo.** Repite solo la mejora sobre los renders ya hechos (sin Blender), con la ubicación actual. Hace llamadas nuevas a OpenAI.
+- **Control de deriva.** Cada imagen mejorada se compara con su render (bordes, líneas, siluetas de muebles y huecos, desplazamientos locales). Si la IA ha movido la cámara, muebles, ventanas o puertas, se repite una vez con instrucciones más estrictas; si vuelve a fallar se muestra el original con el aviso «mejora rechazada: deriva geométrica».
+- **Fallos.** Sin clave de API, con error de la API o tiempo agotado, el proyecto se entrega igual con los renders originales y un aviso en español.
+- **Coste y tiempo.** Se muestran junto al uso de IA de la interpretación. Referencia real (6 vistas, `gpt-image-2.5-sunburst`, calidad alta): ≈ 0,07 $ y ≈ 30 s por llamada, hasta 3 imágenes a la vez; un proyecto de 6 vistas añade 1,5–2,5 minutos y ≈ 0,60–0,75 $ (medido: 0,63 $ / 95 s, 0,70 $ / 129 s y 0,71 $ / 119 s), según cuántas vistas necesiten el reintento estricto.
+
+**Qué se envía.** Los renders y la ubicación (calle y ciudad) se envían a OpenAI, que ya recibe el plano. No se guardan en Git ni entran en paquetes de publicación del sitio. La clave (`OPENAI_API_KEY`) solo vive en el entorno del servidor.
+
+**Ajustes del servidor.** `OPENAI_IMAGE_MODEL` (por defecto `gpt-image-2.5-sunburst`), `OPENAI_IMAGE_QUALITY` (`high`; el modelo admite también `xhigh` y `max`), `OPENAI_IMAGE_COMPLEXITY` (sin fijar), `AAV_ENHANCE_AXONOMETRIC=0` para no mejorar la axonometría.
+
+**Desde la terminal** (proyecto ya renderizado, sin Blender):
+
+```sh
+uv run python -m pipelines.postprocess.enhance outputs/web-projects/<id>          # usa la caché
+uv run python -m pipelines.postprocess.enhance outputs/web-projects/<id> --force  # llamadas nuevas
+```
+
+Escribe `renders/enhanced/<vista>.webp`, actualiza `manifest.json` (`enhanced_url` y `enhancement` por vista: modelo, versión del prompt, huella del estilo, ubicación, fidelidad, estado y coste), `enhancement.json` con el detalle y un registro por llamada en `ai-audit/`. Las imágenes rechazadas quedan solo para inspección en `enhancement/rejected/`.
+
+**Límites conocidos.** Es una edición generativa: aunque se valida la geometría, pueden cambiar detalles menores (formas de cojines, objetos decorativos, cuadros o plantas pequeñas añadidas, el paisaje de las ventanas). La comprobación de fidelidad mide estructura, no garantiza cada píxel; revisa siempre la imagen antes de enviarla a un cliente. La vista «Exterior» es una maqueta seccionada sin cubierta y es la que más tiende a reencuadrarse. El estilo procede de `docs/PROMPT_STYLE.md` (lo mantiene el estudio).
+
+---
+
 # Envío automático y comparación
 
 Al subir un PDF, el servidor lo interpreta con OpenAI automáticamente si dispone de OPENAI_API_KEY. El aviso junto a la carga identifica el uso de la API. El PDF original aparece a la izquierda y la propuesta editable a la derecha; en pantallas estrechas se apilan. Los contornos son inferencias y requieren revisión.
@@ -72,7 +101,7 @@ El botón **Interpretar PDF con OpenAI** envía el PDF a la API y consume tokens
 
 Después de subir el PDF, pulsa el botón de interpretación. Revisa los contornos propuestos, las medidas y la lista editable de supuestos. El modelo propone alturas cuando no están documentadas; los acabados siguen siendo ilustrativos. Pulsa **Aceptar propuesta y supuestos para generar**, después **Comprobar datos** y **Generar renders y 3D**. La aceptación no convierte las inferencias en medidas verificadas. Una geometría incoherente sigue bloqueando Blender y requiere corrección en el editor.
 
-La propuesta admite una planta por ejecución y PDFs de hasta 20 MiB. Cada clic inicia una petición facturable (sin reintentos automáticos), limitada a 16.000 tokens de salida; el consumo se conserva en el proyecto. No se garantiza interpretación correcta de cualquier plano. Los renders proceden de Blender y comparten geometría con el GLB; no hay mejora de imágenes con IA implementada.
+La propuesta admite una planta por ejecución y PDFs de hasta 20 MiB. Cada clic inicia una petición facturable (sin reintentos automáticos), limitada a 16.000 tokens de salida; el consumo se conserva en el proyecto. No se garantiza interpretación correcta de cualquier plano. Los renders proceden de Blender y comparten geometría con el GLB; la mejora con IA posterior es ilustrativa (ver «Mejora de los renders con IA»).
 
 La integración está probada con respuestas simuladas; falta validar una petición real con credenciales y revisar la fidelidad de EA_01_MOD.pdf. La API recibe el documento; `store=False` no equivale a prometer retención cero por el proveedor.
 
