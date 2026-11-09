@@ -33,6 +33,7 @@ log = logging.getLogger(__name__)
 
 MAX_UPLOAD = 50 * 1024**2
 BUSY = {"queued", "running", "extracting"}
+AI_STEPS = ("selection", "furniture", "review")
 ID_PATTERN = re.compile(r"^[a-f0-9]{32}$")
 
 
@@ -125,6 +126,10 @@ class Projects:
 
     def save(self, state):
         state["updated_at"] = timestamp()
+        # When the stage changes, remember since when, so the UI can show elapsed time.
+        if (state.get("stage_since") or {}).get("stage") != state.get("stage"):
+            state["stage_since"] = {"stage": state.get("stage"), "at": state["updated_at"]}
+            state["activity"] = None
         write_json(self.folder(state["id"]) / "project.json", state)
         return state
 
@@ -200,7 +205,24 @@ class Projects:
         try:
             raw = self.raw(ident)
             cache = self.root / "ai-cache"
-            draft, usage = propose(self.folder(ident) / "source.pdf", raw, cache_dir=cache)
+            attempts = {}
+
+            def progress(step):
+                attempts[step] = attempts.get(step, 0) + 1
+                index = AI_STEPS.index(step) + 1 if step in AI_STEPS else 0
+                log.info("Project %s: AI step %s/%s (%s)", ident, index, len(AI_STEPS), step)
+                activity = {
+                    "step": index,
+                    "total": len(AI_STEPS),
+                    "label": step,
+                    "started_at": timestamp(),
+                    "attempt": attempts[step],
+                }
+                self.update(ident, activity=activity)
+
+            draft, usage = propose(
+                self.folder(ident) / "source.pdf", raw, cache_dir=cache, progress=progress
+            )
             draft["title"] = Path(self.get(ident)["filename"]).stem[:200] or draft["title"]
             write_json(self.folder(ident) / "ai-interpretation.json", draft)
             with self.lock:
@@ -329,6 +351,12 @@ class Projects:
 def create_app(
     data_dir=ROOT / "outputs/web-projects", site_dir=ROOT / "site", pipeline_runner=None, port=5174
 ):
+    package_log = logging.getLogger("pipelines")
+    if not package_log.handlers:
+        handler = logging.StreamHandler()
+        handler.setFormatter(logging.Formatter("%(asctime)s %(levelname)s %(message)s"))
+        package_log.addHandler(handler)
+        package_log.setLevel(logging.INFO)
     projects = Projects(data_dir, site_dir, pipeline_runner or run)
 
     @asynccontextmanager

@@ -64,3 +64,20 @@
 .wf-front circle{fill:#d61f69}
 .wf-legend-note{font-size:11px;margin:10px 0 0}
 .wf-review-grid h4 small{font-weight:400}
+
+.wf-progress-panel { margin: 0 0 24px; padding: 22px 24px; border: 1px solid var(--line); background: #f0f1e8; display: grid; gap: 12px; font-size: 13px; }
+.wf-progress-head { display: flex; align-items: center; gap: 10px; }
+.wf-progress-head .wf-clock { margin-left: auto; font-size: 1.05rem; }
+.wf-clock { font-variant-numeric: tabular-nums; font-family: ui-monospace, SFMono-Regular, Menlo, monospace; opacity: .8; }
+.wf-ai-steps { list-style: none; margin: 0; padding: 0; display: grid; gap: 6px; }
+.wf-ai-steps li { display: flex; align-items: center; gap: 10px; font-size: 12px; opacity: .55; }
+.wf-ai-steps li.active, .wf-ai-steps li.done { opacity: 1; }
+.wf-ai-steps li.active { font-weight: 600; }
+.wf-ai-steps li .wf-clock { margin-left: auto; font-weight: 400; }
+.wf-ai-mark { width: 22px; height: 22px; border-radius: 50%; display: inline-grid; place-items: center; font-size: .75rem; border: 1px solid currentColor; flex: none; }
+.wf-ai-steps li.done .wf-ai-mark { background: #343e2c; color: #fff; border-color: #343e2c; }
+.wf-ai-steps li.active .wf-ai-mark { animation: wf-ring 1.4s ease-in-out infinite; }
+@keyframes wf-ring { 50% { box-shadow: 0 0 0 5px rgba(52, 62, 44, .18); } }
+.wf-heartbeat { margin: 0; font-size: 11px; color: #486237; }
+.wf-heartbeat.stale { color: #c0532f; }
+@media (prefers-reduced-motion: reduce) { .wf-ai-steps li.active .wf-ai-mark { animation: none; } }

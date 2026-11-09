@@ -10,7 +10,8 @@ type Draft = { conceptual?: boolean; assumptions?: string[]; finishes?: Record<s
 type Issue = { path: string; message: string };
 type Candidate = { id: string; polygon: Point[]; label: string };
 type Page = { page: number; width: number; height: number; image_url: string; candidates: Candidate[] };
-type Project = { ai_interpretation?: Draft; description?: string; id: string; filename: string; status: 'extracting' | 'review' | 'queued' | 'running' | 'succeeded' | 'failed'; stage: string; error?: string; pages?: Page[]; draft?: Draft; revision: number; issues?: Issue[]; manifest_url?: string; result_revision?: number; finishes_error?: string | null };
+type Project = { ai_interpretation?: Draft; description?: string; id: string; filename: string; status: 'extracting' | 'review' | 'queued' | 'running' | 'succeeded' | 'failed'; stage: string; error?: string; pages?: Page[]; draft?: Draft; revision: number; issues?: Issue[]; manifest_url?: string; result_revision?: number; finishes_error?: string | null; stage_since?: { stage: string; at: string }; activity?: Activity | null };
+type Activity = { step: number; total: number; label: string; started_at: string; attempt?: number };
 type ProjectSummary = Pick<Project, 'id' | 'filename' | 'status' | 'stage'>;
 
 const labels: Record<Kind, string> = { wall: 'Muro', slab: 'Suelo / losa', room: 'Estancia', door: 'Puerta', window: 'Ventana', roof: 'Cubierta', furniture: 'Mueble' };
@@ -23,6 +24,27 @@ const stages: Record<string, string> = { extracting: 'Leyendo el PDF', interpret
 const phases: Record<string, string> = { extracting: 'Leyendo', review: 'En revisión', queued: 'En cola', running: 'Procesando', succeeded: 'Renders listos', failed: 'Necesita atención' };
 const renderStages = ['queued', 'validating_geometry', 'modeling', 'preview_qa', 'rendering', 'final_qa', 'exporting', 'completed'];
 const MAX_DESCRIPTION = 1000;
+const aiSteps = ['Muros, puertas y ventanas', 'Mobiliario y orientación', 'Revisión cruzada con el plano original'];
+// Typical durations observed with gpt-5.4 at high reasoning effort; shown so a long wait never looks like a hang.
+const expected: Record<string, string> = { extracting: 'unos segundos', interpreting: '15–20 minutos (3 llamadas a la IA de 4–8 min cada una)', materials: 'menos de un minuto', queued: 'empieza en cuanto termine el trabajo anterior', rendering: '5–8 minutos' };
+const since = (iso: string | undefined, now: number) => iso ? Math.max(0, Math.floor((now - Date.parse(iso)) / 1000)) : null;
+const clock = (seconds: number | null) => seconds === null ? '—' : `${Math.floor(seconds / 60)}:${String(seconds % 60).padStart(2, '0')}`;
+
+function Progress({ project, now, lastContact, offline }: { project: Project; now: number; lastContact: number; offline: boolean }) {
+  const stageSeconds = project.stage_since?.stage === project.stage ? since(project.stage_since.at, now) : null;
+  const activity = project.stage === 'interpreting' ? project.activity : null;
+  const contact = lastContact ? Math.floor((now - lastContact) / 1000) : null;
+  const stale = offline || contact === null || contact > 15;
+  return <div className="wf-progress-panel" role="status" aria-live="polite">
+    <div className="wf-progress-head"><span className="status-dot pulse"/><strong>{stages[project.stage] ?? 'Procesando'}…</strong><span className="wf-clock" aria-label="Tiempo transcurrido">{clock(stageSeconds)}</span></div>
+    {project.stage === 'interpreting' ? <ol className="wf-ai-steps">{aiSteps.map((label, i) => {
+      const n = i + 1, state = !activity ? (i === 0 ? 'active' : '') : n < activity.step ? 'done' : n === activity.step ? 'active' : '';
+      return <li key={label} className={state}><span className="wf-ai-mark">{state === 'done' ? '✓' : n}</span><span>{label}{state === 'active' && activity?.attempt && activity.attempt > 1 ? ` · corrección ${activity.attempt}` : ''}</span>{state === 'active' ? <span className="wf-clock">{activity ? clock(since(activity.started_at, now)) : 'preparando…'}</span> : null}</li>;
+    })}</ol> : null}
+    <p className="wf-muted">Duración habitual: {expected[project.stage] ?? 'unos minutos'}. El proceso continúa en el servidor aunque cierres esta página o empieces otro plano.</p>
+    <p className={`wf-heartbeat ${stale ? 'stale' : ''}`}>{stale ? 'Sin respuesta del servidor; reintentando…' : `Servidor activo · comprobado hace ${contact} s`}</p>
+  </div>;
+}
 
 class ApiError extends Error {
   issues: Issue[];
@@ -86,6 +108,8 @@ export default function Workflow({ onResult, newRequest = 0 }: { onResult: (url:
   const [points, setPoints] = useState<Point[]>([]);
   const [candidates, setCandidates] = useState(false);
   const [zoom, setZoom] = useState(1);
+  const [now, setNow] = useState(() => Date.now());
+  const [lastContact, setLastContact] = useState(0);
   const shownResult = useRef('');
   const resultCallback = useRef(onResult);
   useEffect(() => { resultCallback.current = onResult; }, [onResult]);
@@ -119,7 +143,7 @@ export default function Workflow({ onResult, newRequest = 0 }: { onResult: (url:
     const poll = async () => {
       try {
         const next = await request<Project>(`/api/projects/${project.id}`, {signal:controller.signal});
-        if (!controller.signal.aborted) { remember(next); setError(''); if (busyStates.has(next.status)) timer = setTimeout(poll, 1200); }
+        if (!controller.signal.aborted) { remember(next); setError(''); setLastContact(Date.now()); if (busyStates.has(next.status)) timer = setTimeout(poll, 1200); }
       } catch (reason) {
         if (!controller.signal.aborted) { setError(reason instanceof Error ? reason.message : 'No se pudo consultar el progreso.'); timer = setTimeout(poll, 2500); }
       }
@@ -129,6 +153,12 @@ export default function Workflow({ onResult, newRequest = 0 }: { onResult: (url:
   }, [project?.id, project?.status, remember]);
 
   const busy = working || !!project && busyStates.has(project.status);
+  useEffect(() => {
+    if (!project || !busyStates.has(project.status)) return;
+    setLastContact(Date.now());
+    const timer = setInterval(() => setNow(Date.now()), 1000);
+    return () => clearInterval(timer);
+  }, [project?.id, project?.status]);
   const page = project?.pages?.find(p => p.page === draft?.page);
   const entity = draft?.entities.find(e => e.id === selected);
   const warnings = draft ? localIssues(draft) : [];
@@ -252,7 +282,7 @@ export default function Workflow({ onResult, newRequest = 0 }: { onResult: (url:
         <button type="button" onClick={newProject} disabled={working}>Nuevo plano</button></div>
       {rendering ? <div className="wf-progress" aria-label="Progreso de Blender"><div style={{width:`${Math.max(6, renderStages.indexOf(project.stage) / (renderStages.length - 1) * 100)}%`}}/></div> : null}
       {project.error ? <div className="wf-message wf-error" role="alert"><strong>{project.stage === 'generation_failed' ? 'La generación se ha detenido.' : 'Atención'}</strong><p>{project.error}</p>{!busy && project.pages?.length ? <button type="button" onClick={()=>void action('interpret')}>Reintentar interpretación</button> : null}</div> : null}
-      {busy && !draft ? <div className="wf-wait"><span className="status-dot pulse"/>{stages[project.stage] ?? 'Procesando'}… Puede tardar uno o dos minutos.</div> : null}
+      {busyStates.has(project.status) ? <Progress project={project} now={now} lastContact={lastContact} offline={offline} /> : null}
     </>}
 
     {project && draft && page ? <div className="wf-review">

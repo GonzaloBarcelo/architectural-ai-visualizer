@@ -1,5 +1,6 @@
 """Local API review gates, job isolation and failure recovery (no Blender subprocesses)."""
 
+import json
 import time
 from pathlib import Path
 from threading import Event
@@ -319,8 +320,13 @@ def test_upload_with_description_interprets_applies_finishes_and_approves(
 ):
     calls, finish_calls = [], []
 
-    def fake_propose(path, raw, cache_dir=None):
+    def fake_propose(path, raw, cache_dir=None, progress=None):
         calls.append(cache_dir)
+        progress("furniture")
+        state = json.loads((path.parent / "project.json").read_text())
+        assert state["stage"] == "interpreting"
+        assert state["activity"]["step"] == 2 and state["activity"]["total"] == 3
+        assert state["stage_since"]["stage"] == "interpreting"
         return ai_draft(raw), {"model": "test", "usage": {"total_tokens": 10}}
 
     def fake_finishes(description, cache_dir):

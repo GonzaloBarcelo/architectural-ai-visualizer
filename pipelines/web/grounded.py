@@ -8,9 +8,11 @@ assembled result drawn over the plan. All geometry comes from the drawing.
 import base64
 import hashlib
 import json
+import logging
 import math
 import os
 import re
+import time
 from pathlib import Path
 from typing import Literal
 
@@ -24,6 +26,8 @@ from pipelines.common import write_json
 from pipelines.web import furniture as F
 from pipelines.web.ai import vector_context
 from pipelines.web.review import Draft
+
+log = logging.getLogger(__name__)
 
 
 class OpeningChoice(BaseModel):
@@ -607,6 +611,7 @@ class Calls:
         self.cache_dir = Path(cache_dir) if cache_dir else None
         self.audit_dir = audit_dir
         self.log = []
+        self.progress = None  # Optional callback(step) before each billed call.
 
     def key(self, *parts):
         return hashlib.sha256(":".join([self.model, *parts]).encode()).hexdigest()
@@ -624,6 +629,10 @@ class Calls:
             if not os.getenv("OPENAI_API_KEY"):
                 raise ValueError("OPENAI_API_KEY missing")
             self.client = OpenAI(timeout=900, max_retries=1)
+        if self.progress:
+            self.progress(step)
+        started = time.monotonic()
+        log.info("OpenAI %s call started (model %s)", step, self.model)
         response = self.client.responses.parse(
             model=self.model,
             store=False,
@@ -639,6 +648,7 @@ class Calls:
             "usage": response.usage.model_dump() if response.usage else None,
             "response_id": response.id,
         }
+        log.info("OpenAI %s call finished in %.0f s", step, time.monotonic() - started)
         record = {"value": response.output_parsed.model_dump(), "meta": meta, "step": step}
         if self.cache_dir:
             write_json(self.cache_dir / f"{step}-{key}.json", record)
@@ -664,7 +674,7 @@ def legacy_selection(path, raw, model, cache_dir):
     return None
 
 
-def propose(path, raw, client=None, cache_dir=None, max_calls=3, review=True):
+def propose(path, raw, client=None, cache_dir=None, max_calls=3, review=True, progress=None):
     """Return (draft, usage). Every step is cached; geometry always comes from the PDF."""
     if path.stat().st_size > 20 * 1024**2:
         raise ValueError("OpenAI admite aquí PDF de hasta 20 MiB.")
@@ -673,6 +683,7 @@ def propose(path, raw, client=None, cache_dir=None, max_calls=3, review=True):
     model = os.getenv("OPENAI_MODEL", DEFAULT_MODEL)
     sha = raw["source"]["sha256"]
     calls = Calls(client, model, cache_dir, path.parent / "ai-audit")
+    calls.progress = progress
     region = plan_region(walls, factor)
     pdf_part = {
         "type": "input_file",
