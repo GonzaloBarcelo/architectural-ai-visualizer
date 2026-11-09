@@ -5,7 +5,7 @@ import './Workflow.css';
 type Point = [number, number];
 type Kind = 'wall' | 'slab' | 'room' | 'door' | 'window' | 'roof' | 'furniture';
 type Finish = { name: string; color: [number, number, number]; roughness: number };
-type Entity = { id: string; kind: Kind; polygon: Point[]; height?: number | null; thickness?: number | null; elevation?: number | null; sill?: number | null; wall_id?: string; name?: string; confirmed: boolean };
+type Entity = { id: string; kind: Kind; polygon: Point[]; height?: number | null; thickness?: number | null; elevation?: number | null; sill?: number | null; wall_id?: string; name?: string; style?: string | null; finish?: string | null; confirmed: boolean };
 type Draft = { conceptual?: boolean; assumptions?: string[]; finishes?: Record<string, Finish>; page: number; title: string; calibration: { points: Point[]; metres: number | null; confirmed: boolean }; floor: { name: string; elevation: number | null; confirmed: boolean }; entities: Entity[]; complete: boolean };
 type Issue = { path: string; message: string };
 type Candidate = { id: string; polygon: Point[]; label: string };
@@ -16,7 +16,8 @@ type ProjectSummary = Pick<Project, 'id' | 'filename' | 'status' | 'stage'>;
 const labels: Record<Kind, string> = { wall: 'Muro', slab: 'Suelo / losa', room: 'Estancia', door: 'Puerta', window: 'Ventana', roof: 'Cubierta', furniture: 'Mueble' };
 const plural: Record<Kind, string> = { wall: 'muros', slab: 'losas', room: 'estancias', door: 'puertas', window: 'ventanas', roof: 'cubiertas', furniture: 'muebles' };
 const kindColors: Record<Kind, string> = { wall: '#2f3a2a', slab: '#c9b48a', room: '#8c72ae', door: '#c0532f', window: '#2f86b8', roof: '#817768', furniture: '#a8754f' };
-const finishLabels: Record<string, string> = { walls: 'Paredes', floor: 'Suelo', doors: 'Puertas', furniture_wood: 'Madera de muebles', upholstery: 'Tapicería', ceramic: 'Cerámica / sanitarios' };
+const finishLabels: Record<string, string> = { walls: 'Paredes', floor: 'Suelo', tile: 'Baños', doors: 'Puertas y armarios', joinery: 'Carpintería exterior', furniture_wood: 'Madera de muebles', upholstery: 'Tapicería', stone: 'Piedra / encimeras', ceramic: 'Sanitarios', metal: 'Metal / grifería' };
+const floorLabels: Record<string, string> = { wood: 'madera', tile: 'baldosa', stone: 'piedra' };
 const busyStates = new Set(['extracting', 'queued', 'running']);
 const stages: Record<string, string> = { extracting: 'Leyendo el PDF', interpreting: 'La IA está interpretando el plano', materials: 'Interpretando la descripción de materiales', validating_geometry: 'Validando geometría', modeling: 'Modelando en Blender', preview_qa: 'Comprobando la escena', rendering: 'Renderizando con Blender', final_qa: 'Comprobando las imágenes', exporting: 'Exportando el modelo 3D', completed: 'Renders listos', queued: 'En cola', review: 'Pendiente de revisión', generation_failed: 'Error de generación', extraction_failed: 'Error al leer el PDF', interrupted: 'Proceso interrumpido' };
 const phases: Record<string, string> = { extracting: 'Leyendo', review: 'En revisión', queued: 'En cola', running: 'Procesando', succeeded: 'Renders listos', failed: 'Necesita atención' };
@@ -59,7 +60,9 @@ function PlanOverlay({ page, entities, faint, onSelect, selected }: { page: Page
   const sorted = [...entities].sort((a, b) => order.indexOf(a.kind) - order.indexOf(b.kind));
   return <svg role="img" aria-label="Interpretación de la IA sobre el plano" viewBox={`0 0 ${page.width} ${page.height}`} className="wf-overlay">
     <image href={page.image_url} width={page.width} height={page.height} opacity={faint ? 0.22 : 1} />
-    {sorted.map(e => <polygon key={e.id} points={e.polygon.map(p => p.join(',')).join(' ')} fill={kindColors[e.kind]} stroke={kindColors[e.kind]} className={`wf-ai-shape wf-ai-${e.kind} ${selected === e.id ? 'selected' : ''}`} onClick={onSelect ? () => onSelect(e.id) : undefined}><title>{labels[e.kind]}{e.name ? ` · ${e.name}` : ''}</title></polygon>)}
+    {sorted.map(e => <polygon key={e.id} points={e.polygon.map(p => p.join(',')).join(' ')} fill={kindColors[e.kind]} stroke={kindColors[e.kind]} className={`wf-ai-shape wf-ai-${e.kind} ${selected === e.id ? 'selected' : ''}`} onClick={onSelect ? () => onSelect(e.id) : undefined}><title>{labels[e.kind]}{e.name ? ` · ${e.name.split(' / ').pop()}` : ''}{e.style ? ` · ${e.style}` : ''}</title></polygon>)}
+    {/* Furniture footprints are ordered back-left, back-right, front-right, front-left: the arrow shows the front. */}
+    {sorted.filter(e => e.kind === 'furniture' && e.polygon.length === 4).map(e => { const [, , fr, fl] = e.polygon; const cx = e.polygon.reduce((a, p) => a + p[0], 0) / 4, cy = e.polygon.reduce((a, p) => a + p[1], 0) / 4; const fx = (fr[0] + fl[0]) / 2, fy = (fr[1] + fl[1]) / 2; return <g key={`${e.id}-front`} className="wf-front"><line x1={cx} y1={cy} x2={fx} y2={fy} /><circle cx={fx} cy={fy} r={2.2} /></g>; })}
   </svg>;
 }
 
@@ -133,7 +136,7 @@ export default function Workflow({ onResult }: { onResult: (url: string | null) 
   const rendering = !!project && (project.status === 'queued' || (project.status === 'running' && renderStages.includes(project.stage)));
   const step = !project ? 1 : project.status === 'succeeded' || rendering ? 3 : 2;
   const counts = (draft?.entities ?? []).reduce<Partial<Record<Kind, number>>>((acc, e) => ({...acc, [e.kind]: (acc[e.kind] ?? 0) + 1}), {});
-  const rooms = (draft?.entities ?? []).filter(e => e.kind === 'room' && e.name).map(e => e.name as string);
+  const rooms = (draft?.entities ?? []).filter(e => e.kind === 'room' && e.name).map(e => `${e.name}${e.finish ? ` · ${floorLabels[e.finish] ?? e.finish}` : ''}`);
 
   const mutate = (change: (d: Draft) => Draft) => {
     setDraft(d => d ? { ...change(d), complete: false } : d); setDirty(true); setNotice(''); setIssues([]);
@@ -250,11 +253,11 @@ export default function Workflow({ onResult }: { onResult: (url: string | null) 
           <figure><figcaption>Plano original</figcaption><div className="wf-compare-frame"><img src={page.image_url} alt={`Plano original, página ${page.page}`} /></div></figure>
           <figure><figcaption>Interpretación de la IA <label className="wf-toggle"><input type="checkbox" checked={showAI} onChange={e=>setShowAI(e.target.checked)}/> Superponer</label></figcaption><div className="wf-compare-frame"><PlanOverlay page={page} entities={showAI ? draft.entities : []} faint={showAI} /></div></figure>
         </div>
-        <ul className="wf-legend" aria-label="Elementos interpretados">{(['wall','door','window','room','furniture'] as Kind[]).map(k=><li key={k}><span style={{background:kindColors[k]}}/>{counts[k] ?? 0} {plural[k]}</li>)}</ul>
+        <p className="wf-muted wf-legend-note">Las flechas de los muebles indican su frente (orientación).</p><ul className="wf-legend" aria-label="Elementos interpretados">{(['wall','door','window','room','furniture'] as Kind[]).map(k=><li key={k}><span style={{background:kindColors[k]}}/>{counts[k] ?? 0} {plural[k]}</li>)}</ul>
         <div className="wf-review-grid">
           <section><h4>Estancias</h4>{rooms.length ? <ul className="wf-chips">{rooms.map((r, i)=><li key={`${r}-${i}`}>{r}</li>)}</ul> : <p className="wf-muted">No se delimitaron estancias cerradas.</p>}</section>
-          <section><h4>Materiales</h4>
-            {draft.finishes && Object.keys(draft.finishes).length ? <ul className="wf-swatches">{Object.entries(draft.finishes).map(([k, f])=><li key={k}><span style={{background:swatch(f)}}/><div><strong>{finishLabels[k] ?? k}</strong>{f.name}</div></li>)}</ul> : <p className="wf-muted">Acabados por defecto del estudio.</p>}
+          <section><h4>Materiales <small className="wf-muted">· estilo lujo minimalista</small></h4>
+            {draft.finishes && Object.keys(draft.finishes).length ? <ul className="wf-swatches">{Object.entries(draft.finishes).map(([k, f])=><li key={k}><span style={{background:swatch(f)}}/><div><strong>{finishLabels[k] ?? k}</strong>{f.name}</div></li>)}</ul> : <p className="wf-muted">Paleta del estudio: roble natural, mármol Calacatta, latón cepillado, bouclé marfil.</p>}
             {project.finishes_error ? <p className="wf-muted wf-warn">{project.finishes_error}</p> : null}
             <label className="wf-field"><span>Descripción de materiales</span><textarea rows={3} maxLength={MAX_DESCRIPTION} value={materialsText} disabled={busy} onChange={e=>setMaterialsText(e.target.value)} placeholder="Opcional: describe suelos, paredes, madera, tapicería…"/></label>
             <button type="button" disabled={busy || materialsText.trim() === (project.description ?? '')} onClick={()=>void updateMaterials()}>Actualizar materiales</button>

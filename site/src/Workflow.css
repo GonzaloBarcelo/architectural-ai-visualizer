@@ -60,3 +60,7 @@
 @media(max-width:900px){.wf-review-grid{grid-template-columns:1fr 1fr}.wf-review-head{flex-direction:column;align-items:stretch}.wf-review-cta{align-items:stretch}}
 @media(max-width:700px){.wf-upload-card,.wf-compare,.wf-review-grid{grid-template-columns:1fr}.wf-heading{flex-direction:column;align-items:stretch}.wf-steps{grid-template-columns:repeat(3,1fr)}.wf-job button{margin-left:0}}
 .wf-warn{color:#8a5a2b}
+.wf-front line{stroke:#d61f69;stroke-width:1.2;vector-effect:non-scaling-stroke}
+.wf-front circle{fill:#d61f69}
+.wf-legend-note{font-size:11px;margin:10px 0 0}
+.wf-review-grid h4 small{font-weight:400}

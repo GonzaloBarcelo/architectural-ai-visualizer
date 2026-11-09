@@ -1,3 +1,38 @@
+# Fidelity iteration — 2026-11-09 (Claude Code)
+
+Goal: read the blueprint much more closely (walls, openings, furniture, bathrooms), orient
+furniture logically, and render in an elegant, minimal-luxury style. API usage is not a
+constraint in this phase.
+
+| Area | Implementation | Evidence |
+| --- | --- | --- |
+| Furniture from the PDF | `pipelines/web/furniture.py` reads exact footprints from the white masks CAD exports put behind furniture blocks, plus closed furniture strokes (kitchen runs). Sub-parts merge (pillows into beds), rugs never swallow sofas, facade joinery is excluded | EA_01_MOD_1.pdf: 27 candidates: wardrobes, beds, nightstands, shower trays, basins, toilets, dining set, rug, sofa, bar |
+| Opening evidence | Per gap: dashed swing arcs, joinery lines, facade contact, width. Door styles: hinged / sliding / glazed; window styles: casement / fixed | Unit tests + visual check on the plan |
+| Floors per room | Light parallel hatching → wood; two-way fine grid → tile | Real plan: living + bedrooms = wood, both bathrooms = tile |
+| AI calls | 3 calls, `reasoning.effort = high`, PDF + overview + 2×2 zoomed tiles with a PDF-point grid: (1) walls/openings with evidence, (2) furniture kind + front for every candidate, extras only for drawn pieces without a candidate, (3) self-review over an overlay of the assembled result (arrows show each piece's front) returning corrections. Each step cached by its exact inputs | See live result below |
+| Orientation | Deterministic check after the AI: beds/sofas/wardrobes/counters/toilets/basins must back onto a wall (short vs long side by type), chairs/stools face their table; corrections are listed as assumptions. Footprints are stored as back-left, back-right, front-right, front-left | Unit tests; dry run corrected deliberately wrong bed fronts |
+| Models | `furnish.py`: ~30 oriented, detailed parametric models (upholstered beds with headboard and cushions, walnut nightstands with brass lamps, wardrobes with reveals and pulls, sofas with cushions, stone coffee/dining tables with pendant, kitchen with stone worktop, hob, sink, wall units, wall-hung toilets, floating vanities with vessel basins and mirrors, shower trays with glass screens and rain heads, plants, lamps) | Every kind builds valid geometry in tests |
+| Joinery | Windows: black aluminium frames, mullions, glass, stone sills. Doors: oak casing, leaf, brass lever or pull; glazed balcony doors | Visual |
+| Style | Default palette: warm-white lime plaster, natural European oak, light travertine baths, Calacatta marble, walnut, ivory bouclé, white linen, sage accents, brushed brass, matt black. Subtle procedural grain (stripped for GLB). The description overrides any of 10 slots | Visual |
+| Renders | Exterior, axonometric and one interior per main room (up to 4): ceiling and warm area lights only for interior shots; camera stands on the hero piece's front (foot of the bed, facing sofa/vanity), never inside furniture, framed within its room. Server renders at 1600 px / 160 samples | Dry run: 518/518 QA, 6 renders |
+
+## Live result — EA_01_MOD_1.pdf through the running server (gpt-5.4, real key)
+
+Project `36a71a6c173b4500913d1de5b4d5ba3f`, description: oak floor, warm-white walls, white marble worktop, travertine baths, brushed brass, bouclé sofa.
+
+| Call | Tokens (reasoning) | Result |
+| --- | --- | --- |
+| 1. Walls + openings | 42,309 (18,541) | 52 walls; facade windows casement, balcony/gallery doors glazed, interior doors hinged. The v4 error (hall wardrobes read as door G11) is gone. Doubts listed in Spanish |
+| 2. Furniture | 53,445 (15,497) | All 27 candidates labelled: beds face left (headboards on the wall with the nightstands), wardrobes, showers, basins, toilets, dining set, rug, sofa, fridge; hob recognised as part of the worktop; extras: coffee table, kitchen worktop run, washing machine |
+| 3. Self-review | 66,786 (26,876) | Glazed openings → sliding, gallery window G21 added, G1 removed as open passage, two strips reclassified as fixed elements |
+| Finishes | small | 10 slots matching the description |
+
+Interpretation took 1,141 s (three high-reasoning calls, ~162k tokens). Draft: 62 walls, 5 doors, 5 windows, 5 rooms with floors (3 wood, 2 tile), 24 furniture pieces, 0 validation issues. Approved → Blender 444 s at 1600 px / 160 samples: **539/539 QA**, 6 renders (exterior, axonometric, living, both bedrooms, bathroom), 414 KB GLB, all served 200.
+
+Known limits: the washing machine in the gallery was dropped (gallery is outside the modelled floor); the review removed G1, so Habitación 01 opens through a passage instead of a leaf; a description asking for oak everywhere yields very uniform wood; finishes and furniture are illustrative. Only one real blueprint has been tested.
+
+---
+
 # MVP González Cardona — 2026-11-09
 
 Three-step studio flow implemented: **1. Upload PDF (+ optional material description) → 2. Review the AI interpretation side by side with the original → 3. Blender renders + GLB.** The only user inputs are the PDF and the optional description (≤1000 characters). Branding: González Cardona Arquitectura.

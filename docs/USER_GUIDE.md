@@ -4,7 +4,11 @@
 2. **Revisa.** A la izquierda el plano original; a la derecha la interpretación de la IA (muros, puertas, ventanas, estancias y muebles). Comprueba estancias, materiales y supuestos. Puedes cambiar la descripción y pulsar **Actualizar materiales** sin volver a interpretar el plano. Si algo no encaja: **Volver a interpretar** o **Edición avanzada**.
 3. **Genera.** Pulsa **Aprobar y generar renders**. Blender crea renders exterior, interior y axonometría, y el modelo 3D (GLB), visibles debajo y descargables.
 
-Un mismo PDF no vuelve a consumir tokens: la interpretación queda en caché. `#project=<id>` en la URL abre un proyecto concreto. Requisitos del servidor: `OPENAI_API_KEY` (y opcionalmente `OPENAI_MODEL`, por defecto `gpt-5.4`).
+**Qué revisar en el paso 2.** Los muebles salen del propio dibujo del PDF (contorno exacto); la IA decide qué es cada pieza y hacia dónde mira. En la vista de la IA, la flecha rosa de cada mueble señala su frente: pies de la cama, asiento del sofá, puertas del armario, frente del lavabo. Si la IA se equivoca, el sistema corrige automáticamente las piezas que deben apoyarse en un muro y las sillas (miran a su mesa), y lo anota en «Supuestos y dudas». Cada estancia muestra su pavimento leído del rayado (madera / baldosa).
+
+**Renders.** Exterior, axonometría y un interior por estancia principal (hasta 4), con techo y luz cálida sólo en las vistas interiores. Estilo por defecto: lujo minimalista (roble natural, mármol Calacatta, travertino en baños, nogal, bouclé marfil, latón cepillado, carpintería negra). La descripción de materiales sustituye cualquiera de esos acabados.
+
+La interpretación hace tres llamadas a OpenAI con razonamiento alto (muros y huecos, muebles y orientación, autorrevisión sobre el resultado dibujado); tarda varios minutos la primera vez. Un mismo PDF no vuelve a consumir tokens: la interpretación queda en caché. `#project=<id>` en la URL abre un proyecto concreto. Requisitos del servidor: `OPENAI_API_KEY` (y opcionalmente `OPENAI_MODEL`, por defecto `gpt-5.4`).
 
 ---
 
