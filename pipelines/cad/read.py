@@ -568,7 +568,7 @@ def insert_geometry(insert, factor):
     rotation = math.radians(insert.dxf.rotation)
     ix, iy = insert.dxf.insert.x, insert.dxf.insert.y
     cos, sin = math.cos(-rotation), math.sin(-rotation)
-    local, arcs, types = [], [], Counter()
+    local, arcs, types, outlines = [], [], Counter(), []
     try:
         entities = list(disassemble.recursive_decompose([insert]))
     except CAD_ERRORS:
@@ -583,6 +583,9 @@ def insert_geometry(insert, factor):
             continue
         if kind == "ARC":
             arcs.append(_arc(e, factor))
+        outline = _outline(e, factor)
+        if outline is not None:
+            outlines.append(outline)
         shapes.append(e)
     try:
         for primitive in disassemble.to_primitives(shapes):
@@ -612,7 +615,80 @@ def insert_geometry(insert, factor):
         "types": dict(types),
         "mirrored": insert.dxf.xscale * insert.dxf.yscale < 0,
         "rotation": round(insert.dxf.rotation % 360, 1),
+        "outlines": outlines,
     }
+
+
+def _outline(e, factor):
+    """Closed shape drawn inside a block (closed polyline or wipeout mask), world metres."""
+    kind = e.dxftype()
+    try:
+        if kind == "WIPEOUT":
+            points = [(v.x, v.y) for v in e.boundary_path_wcs()]
+        elif kind in ("LWPOLYLINE", "POLYLINE"):
+            path = list(epath.make_path(e).flattening(0.002 / factor))
+            closed = getattr(e, "closed", False) or getattr(e, "is_closed", False)
+            if len(path) < 4 or not (closed or path[0].distance(path[-1]) <= 1e-6 / factor):
+                return None
+            points = [(v.x, v.y) for v in path]
+        else:
+            return None
+    except CAD_ERRORS:
+        return None
+    shapes = _polygon([(x * factor, y * factor) for x, y in points])
+    return max(shapes, key=lambda p: p.area) if shapes else None
+
+
+def components(outlines, min_side=0.25, min_area=0.06):
+    """Distinct objects drawn in a block: an inner contour of the same object (a frame line
+    covering most of it) is dropped; a smaller object drawn on top of another is kept."""
+    shapes = [
+        p
+        for p in outlines
+        if p.area >= min_area and sides_m(p.minimum_rotated_rectangle)[0] >= min_side
+    ]
+    kept = []
+    for p in sorted(shapes, key=lambda p: -p.area):
+        if any(p.intersection(q).area > 0.9 * p.area and p.area >= 0.8 * q.area for q in kept):
+            continue
+        kept.append(p)
+    return kept
+
+
+def split_composite(b, kind):
+    """Bed/sofa blocks that also draw nightstands, a rug or a table: the main piece keeps the
+    named kind (an L-shaped sofa becomes straight modules facing into the L); the other pieces
+    are returned for classification. Returns (main pieces, other pieces) or None."""
+    parts_ = components(b["outlines"])
+    if kind not in ("bed_double", "bed_single", "sofa") or len(parts_) < 2:
+        return None
+    if kind == "sofa":  # a rug drawn around the sofa is not the sofa
+        containers = [
+            c for c in parts_ if any(c.contains(o.buffer(-0.01)) for o in parts_ if o is not c)
+        ]
+        candidates = [c for c in parts_ if not any(c is k for k in containers)] or parts_
+    else:
+        candidates = parts_
+    main = max(candidates, key=lambda p: p.area)
+    # Pieces mostly inside the main one (pillows, cushions) are part of it, not separate objects.
+    others = [c for c in parts_ if c is not main and c.intersection(main).area < 0.5 * c.area]
+    if not others:
+        return None
+    box = main.minimum_rotated_rectangle
+    if main.area >= 0.8 * box.area:
+        return [(box, None)], others
+    notch = box.difference(main)
+    centre = notch.centroid if not notch.is_empty else box.centroid
+    pieces = []
+    for piece in convex_pieces(main):
+        rect = piece.minimum_rotated_rectangle
+        if sides_m(rect)[0] < 0.3:
+            continue
+        c = rect.centroid
+        dx, dy = centre.x - c.x, centre.y - c.y
+        norm = math.hypot(dx, dy) or 1
+        pieces.append((rect, (dx / norm, dy / norm)))
+    return (pieces, others) if pieces else None
 
 
 def sides_m(rect):
@@ -966,20 +1042,55 @@ def read_plan(doc, plan, units, extra_walls=(), excluded_walls=()):
             notes.append(f"Bloque «{b['block']}» ({b['handle']}) sobre los muros: ignorado.")
             continue
         kind = C.furniture_kind([b["block"], b["raw_block"], *b["attributes"].values()], short)
-        furniture.append(
-            {
-                "id": "B" + b["handle"],
-                "handle": b["handle"],
-                "layer": b["layer"],
-                "block": b["block"],
-                "attributes": b["attributes"],
-                "content": b["content"],
-                "rect": b["rect"],
-                "front": b["front"],
-                "mirrored": b["mirrored"],
-                "rotation": b["rotation"],
-                "kind": kind,
-            }
+        base = {
+            "handle": b["handle"],
+            "layer": b["layer"],
+            "block": b["block"],
+            "attributes": b["attributes"],
+            "content": b["content"],
+            "mirrored": b["mirrored"],
+            "rotation": b["rotation"],
+        }
+        split = split_composite(b, kind)
+        if split is None:
+            furniture.append(
+                {
+                    **base,
+                    "id": "B" + b["handle"],
+                    "rect": b["rect"],
+                    "front": b["front"],
+                    "kind": kind,
+                }
+            )
+            continue
+        mains, others = split
+        for k, (rect, front) in enumerate(mains):
+            furniture.append(
+                {
+                    **base,
+                    "id": "B" + b["handle"] + (f"-m{k + 1}" if k else ""),
+                    "rect": rect,
+                    "front": front or b["front"],
+                    "fixed_front": front is not None,
+                    "kind": C.furniture_kind([b["block"], b["raw_block"]], sides_m(rect)[0]),
+                }
+            )
+        for k, shape in enumerate(others, start=1):
+            furniture.append(
+                {
+                    **base,
+                    "id": f"B{b['handle']}-p{k}",
+                    "block": f"{b['block']} (pieza {k})",
+                    "part_of": b["block"],
+                    "content": {"outline": 1},
+                    "rect": shape.minimum_rotated_rectangle,
+                    "front": b["front"],
+                    "kind": None,
+                }
+            )
+        notes.append(
+            f"Bloque «{b['block']}» ({b['handle']}) dibuja varias piezas: {len(mains)} de "
+            f"{kind} y {len(others)} más para clasificar."
         )
     outlines = []
     for e in entities:

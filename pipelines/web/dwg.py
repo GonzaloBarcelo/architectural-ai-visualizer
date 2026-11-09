@@ -29,7 +29,7 @@ from pipelines.web.review import Draft
 
 log = logging.getLogger(__name__)
 
-PROMPT_VERSION = "dwg-doubts-v1"
+PROMPT_VERSION = "dwg-doubts-v2"
 SHEET_UNIT = 0.01  # metres per sheet unit: the review sheet is drawn in centimetres, y down
 PRICE_INPUT, PRICE_OUTPUT = 2.50, 15.00  # USD per 1M tokens (gpt-5.4 list price, brief)
 WALL_HEIGHT = 2.7
@@ -112,7 +112,9 @@ fixed: answer only by item id; never propose coordinates or dimensions.
 Frame: metres, origin at the plan's lower-left corner, x to the right, y up. Directions:
 up = +y, down = -y, right = +x, left = -x. "walls" lists the sides of an item that touch a wall.
 Items by type:
-- furniture: an unrecognised block (names like A$C… or *U… carry no meaning). Give kind
+- furniture: an unrecognised block (names like A$C… or *U… carry no meaning), or a piece
+  ("part_of") drawn inside a named block next to its main piece (nightstands beside a bed,
+  a rug or a coffee table drawn with a sofa). Give kind
   (not_furniture for symbols, joinery, columns, radiators, hobs/sinks/appliances drawn inside a
   counter that already exists, windows/doors outside the walls), a short Spanish name and its
   front: the side its usable face points to (bed = foot end; sofa/chair = seat side; wardrobe,
@@ -226,6 +228,8 @@ def settle_front(kind, rect, front, walls):
 
 def front_doubt(item, sheet, walls_sheet):
     """True when the walls cannot settle which side is the back of a wall-backed piece."""
+    if item.get("fixed_front"):
+        return False  # set by the drawing itself (modules of an L-shaped sofa face into the L)
     rect = sheet.shape(item["rect"])
     return settle_front(item["kind"], rect, side_of(item["front"]), walls_sheet)[2]
 
@@ -274,6 +278,7 @@ def doubts(reading):
                     **common,
                     "layer": f["layer"],
                     "block": f["block"],
+                    **({"part_of": f["part_of"]} if f.get("part_of") else {}),
                     **({"attributes": f["attributes"]} if f["attributes"] else {}),
                     "content": f["content"],
                     "insert_front": side_of(f["front"]) if f["block"] else None,
@@ -769,7 +774,9 @@ def assemble(reading, answers, source, notes_ai=()):
     tables = [sheet.shape(f["rect"]) for f, kind, *_ in placed if kind in F.TABLES]
     for i, (f, kind, name, front, status) in enumerate(placed):
         rect = sheet.shape(f["rect"])
-        if kind in F.FACES_TABLE:
+        if f.get("fixed_front"):
+            note = None
+        elif kind in F.FACES_TABLE:
             front, note = F.resolve_front(kind, rect, front, walls_sheet, tables, SHEET_UNIT)
         else:
             front, note, _ = settle_front(kind, rect, front, walls_sheet)

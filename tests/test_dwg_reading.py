@@ -344,3 +344,45 @@ def test_near_spelling_never_turns_unrelated_layers_into_walls():
     assert C.layer_match("a.venatana") == ("window", "parecido a «VENTANA»")
     assert C.layer_match("TABIQEUS")[0] == "wall"
     assert C.layer_match("a.moble") == ("furniture", "nombre")
+
+
+def test_composite_bed_and_l_sofa_blocks_split_into_their_drawn_pieces(tmp_path):
+    doc = ezdxf.new()
+    doc.header["$INSUNITS"] = 4
+    bed = doc.blocks.new("CAMA_140")  # 1.4 m bed with a nightstand drawn on each side
+    bed.add_lwpolyline([(300, 0), (1700, 0), (1700, 2000), (300, 2000)], close=True)
+    for x0 in (0, 1700):
+        bed.add_lwpolyline([(x0, 1700), (x0 + 300, 1700), (x0 + 300, 2000), (x0, 2000)], close=True)
+    sofa = doc.blocks.new("SOFA_L")  # a rug, an L-shaped sofa on it and a coffee table
+    sofa.add_wipeout([(0, 0), (2400, 0), (2400, 2400), (0, 2400)])
+    sofa.add_lwpolyline(
+        [(100, 100), (2300, 100), (2300, 800), (800, 800), (800, 2300), (100, 2300)], close=True
+    )
+    sofa.add_lwpolyline([(1200, 1200), (1800, 1200), (1800, 1800), (1200, 1800)], close=True)
+    msp = doc.modelspace()
+    for x0, y0, x1, y1 in __import__("dxf_fixture").WALLS:
+        msp.add_lwpolyline(
+            [(x0, y0), (x1, y0), (x1, y1), (x0, y1)], close=True, dxfattribs={"layer": "MUROS"}
+        )
+    msp.add_blockref("CAMA_140", (200, 1800), dxfattribs={"layer": "MUEBLES"})  # head on north wall
+    msp.add_blockref("SOFA_L", (3200, 1100), dxfattribs={"layer": "MUEBLES"})
+    path = tmp_path / "composite.dxf"
+    doc.saveas(path)
+    r = reading(path)
+    by_id = {f["id"]: f for f in r["furniture"]}
+    bed_items = [f for f in r["furniture"] if f["block"].startswith("CAMA_140")]
+    main = next(f for f in bed_items if f["kind"])
+    assert main["kind"] == "bed_double" and sorted(R.sides_m(main["rect"])) == pytest.approx(
+        [1.4, 2.0]
+    )
+    assert len([f for f in bed_items if f.get("part_of")]) == 2  # the two nightstands
+    sofas = [f for f in r["furniture"] if f["kind"] == "sofa"]
+    assert len(sofas) == 2 and all(f["fixed_front"] for f in sofas)
+    # Each module faces into the L (towards the coffee-table corner at +x, +y of the block).
+    fronts = sorted(tuple(round(v) for v in f["front"]) for f in sofas)
+    assert fronts == [(0, 1), (1, 0)]
+    parts = [f for f in r["furniture"] if f.get("part_of") == "SOFA_L"]
+    assert sorted(round(p["rect"].area, 2) for p in parts) == [0.36, 5.76]  # table and rug
+    furniture_doubts = [i for i in dwg.doubts(r)["items"] if i["type"] in ("furniture", "front")]
+    assert len(furniture_doubts) == 4 and all(i.get("part_of") for i in furniture_doubts)
+    assert by_id
