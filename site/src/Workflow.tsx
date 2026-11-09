@@ -5,13 +5,20 @@ import './Workflow.css';
 type Point = [number, number];
 type Kind = 'wall' | 'slab' | 'room' | 'door' | 'window' | 'roof' | 'furniture';
 type Finish = { name: string; color: [number, number, number]; roughness: number };
-type Entity = { id: string; kind: Kind; polygon: Point[]; height?: number | null; thickness?: number | null; elevation?: number | null; sill?: number | null; wall_id?: string; name?: string; style?: string | null; finish?: string | null; confirmed: boolean };
+type CadRef = { handles: string[]; layers: string[]; block?: string | null; reading: 'verified' | 'inferred' | 'user'; detail?: string | null };
+type Entity = { id: string; kind: Kind; polygon: Point[]; height?: number | null; thickness?: number | null; elevation?: number | null; sill?: number | null; wall_id?: string; name?: string; style?: string | null; finish?: string | null; cad?: CadRef | null; confirmed: boolean };
 type Draft = { conceptual?: boolean; assumptions?: string[]; finishes?: Record<string, Finish>; page: number; title: string; calibration: { points: Point[]; metres: number | null; confirmed: boolean }; floor: { name: string; elevation: number | null; confirmed: boolean }; entities: Entity[]; complete: boolean };
 type Issue = { path: string; message: string };
 type Candidate = { id: string; polygon: Point[]; label: string };
 type Page = { page: number; width: number; height: number; image_url: string; candidates: Candidate[] };
-type Project = { ai_interpretation?: Draft; description?: string; id: string; filename: string; status: 'extracting' | 'review' | 'queued' | 'running' | 'succeeded' | 'failed'; stage: string; error?: string; pages?: Page[]; draft?: Draft; revision: number; issues?: Issue[]; manifest_url?: string; result_revision?: number; finishes_error?: string | null; stage_since?: { stage: string; at: string }; activity?: Activity | null };
-type Activity = { step: number; total: number; label: string; started_at: string; attempt?: number };
+type ReadingStatus = 'verified' | 'inferred' | 'user' | 'missing';
+type CadItem = { type: string; id: string; label: string; status: ReadingStatus; detail?: string | null; handles: string[]; layers: string[]; block?: string | null };
+type Pending = { type: string; id: string; label: string; detail?: string | null; options?: string[] | null; blocking: boolean; polygon?: Point[] | null };
+type Usage = { input: number; output: number; reasoning: number; cached_input: number; cost_usd: number };
+type Plan = { index: number; name: string; size_m: number[]; wall_area_m2: number };
+type Cad = { format: string; filename: string; sha256: string; converter?: string | null; units: { name: string; source: string; inferred: boolean }; plan: Plan; plans: Plan[]; items: CadItem[]; pending: Pending[]; notes: string[]; reading_seconds: number; ai: { model: string; called: boolean; cache_hit: boolean; error?: string | null; image: boolean; usage: Usage; seconds: number; items: number } };
+type Project = { source_format?: 'pdf' | 'dwg' | 'dxf'; cad?: Cad; plans?: Plan[]; plan_index?: number; ai_interpretation?: Draft; description?: string; id: string; filename: string; status: 'extracting' | 'review' | 'queued' | 'running' | 'succeeded' | 'failed'; stage: string; error?: string; pages?: Page[]; draft?: Draft; revision: number; issues?: Issue[]; manifest_url?: string; result_revision?: number; finishes_error?: string | null; stage_since?: { stage: string; at: string }; activity?: Activity | null };
+type Activity = { step: number; total: number; label: string; labels?: string[]; started_at: string; attempt?: number };
 type ProjectSummary = Pick<Project, 'id' | 'filename' | 'status' | 'stage'>;
 
 const labels: Record<Kind, string> = { wall: 'Muro', slab: 'Suelo / losa', room: 'Estancia', door: 'Puerta', window: 'Ventana', roof: 'Cubierta', furniture: 'Mueble' };
@@ -20,28 +27,37 @@ const kindColors: Record<Kind, string> = { wall: '#2f3a2a', slab: '#c9b48a', roo
 const finishLabels: Record<string, string> = { walls: 'Paredes', floor: 'Suelo', tile: 'Baños', doors: 'Puertas y armarios', joinery: 'Carpintería exterior', furniture_wood: 'Madera de muebles', upholstery: 'Tapicería', stone: 'Piedra / encimeras', ceramic: 'Sanitarios', metal: 'Metal / grifería' };
 const floorLabels: Record<string, string> = { wood: 'madera', tile: 'baldosa', stone: 'piedra' };
 const busyStates = new Set(['extracting', 'queued', 'running']);
-const stages: Record<string, string> = { extracting: 'Leyendo el PDF', interpreting: 'La IA está interpretando el plano', materials: 'Interpretando la descripción de materiales', validating_geometry: 'Validando geometría', modeling: 'Modelando en Blender', preview_qa: 'Comprobando la escena', rendering: 'Renderizando con Blender', final_qa: 'Comprobando las imágenes', exporting: 'Exportando el modelo 3D', completed: 'Renders listos', queued: 'En cola', review: 'Pendiente de revisión', generation_failed: 'Error de generación', extraction_failed: 'Error al leer el PDF', interrupted: 'Proceso interrumpido' };
+const stages: Record<string, string> = { reading_dwg: 'Convirtiendo y leyendo el DWG', choose_plan: 'Elige la planta que quieres modelar', resolving: 'Aplicando tus respuestas', extracting: 'Leyendo el PDF', interpreting: 'La IA está interpretando el plano', materials: 'Interpretando la descripción de materiales', validating_geometry: 'Validando geometría', modeling: 'Modelando en Blender', preview_qa: 'Comprobando la escena', rendering: 'Renderizando con Blender', final_qa: 'Comprobando las imágenes', exporting: 'Exportando el modelo 3D', completed: 'Renders listos', queued: 'En cola', review: 'Pendiente de revisión', generation_failed: 'Error de generación', extraction_failed: 'Error al leer el PDF', interrupted: 'Proceso interrumpido' };
 const phases: Record<string, string> = { extracting: 'Leyendo', review: 'En revisión', queued: 'En cola', running: 'Procesando', succeeded: 'Renders listos', failed: 'Necesita atención' };
 const renderStages = ['queued', 'validating_geometry', 'modeling', 'preview_qa', 'rendering', 'final_qa', 'exporting', 'completed'];
 const MAX_DESCRIPTION = 1000;
 const aiSteps = ['Muros, puertas y ventanas', 'Mobiliario y orientación', 'Revisión cruzada con el plano original'];
+const dwgSteps = ['Lectura del DWG', 'Consulta de dudas a la IA'];
+const isCad = (p?: Project | null) => !!p?.source_format && p.source_format !== 'pdf';
+const sides: Record<string, string> = { up: 'arriba', down: 'abajo', left: 'izquierda', right: 'derecha', any: 'indiferente' };
+const furnitureKinds: Record<string, string> = { bed_double: 'Cama doble', bed_single: 'Cama individual', nightstand: 'Mesita de noche', wardrobe: 'Armario', dresser: 'Cómoda', desk: 'Escritorio', shelving: 'Estantería', sofa: 'Sofá', armchair: 'Butaca', coffee_table: 'Mesa de centro', side_table: 'Mesa auxiliar', rug: 'Alfombra', tv_unit: 'Mueble TV', sideboard: 'Aparador', dining_set: 'Comedor (mesa y sillas)', dining_table: 'Mesa de comedor', chair: 'Silla', stool: 'Taburete', kitchen_counter: 'Encimera / módulo de cocina', kitchen_island: 'Isla de cocina', fridge: 'Frigorífico', toilet: 'Inodoro', bidet: 'Bidé', washbasin: 'Lavabo', shower: 'Ducha', bathtub: 'Bañera', washing_machine: 'Lavadora', plant: 'Planta', floor_lamp: 'Lámpara de pie', not_furniture: 'No es mobiliario (no modelar)' };
+const readingLabels: Record<ReadingStatus, string> = { verified: 'Leído del DWG', inferred: 'Resuelto por la IA', user: 'Indicado por ti', missing: 'Pendiente' };
+const money = (v: number) => '$' + v.toFixed(v < 0.1 ? 3 : 2);
 // Typical durations observed with gpt-5.4 at high reasoning effort; shown so a long wait never looks like a hang.
-const expected: Record<string, string> = { extracting: 'unos segundos', interpreting: '15–20 minutos (3 llamadas a la IA de 4–8 min cada una)', materials: 'menos de un minuto', queued: 'empieza en cuanto termine el trabajo anterior', rendering: '5–8 minutos' };
+const expected: Record<string, string> = { reading_dwg: 'unos segundos', resolving: 'unos segundos', extracting: 'unos segundos', interpreting: '15–20 minutos (3 llamadas a la IA de 4–8 min cada una)', materials: 'menos de un minuto', queued: 'empieza en cuanto termine el trabajo anterior', rendering: '5–8 minutos' };
 const since = (iso: string | undefined, now: number) => iso ? Math.max(0, Math.floor((now - Date.parse(iso)) / 1000)) : null;
 const clock = (seconds: number | null) => seconds === null ? '—' : `${Math.floor(seconds / 60)}:${String(seconds % 60).padStart(2, '0')}`;
 
 function Progress({ project, now, lastContact, offline }: { project: Project; now: number; lastContact: number; offline: boolean }) {
   const stageSeconds = project.stage_since?.stage === project.stage ? since(project.stage_since.at, now) : null;
-  const activity = project.stage === 'interpreting' ? project.activity : null;
+  const cad = isCad(project);
+  const showSteps = project.stage === 'interpreting' || (cad && project.stage === 'resolving');
+  const activity = showSteps ? project.activity : null;
+  const steps = activity?.labels ?? (cad ? dwgSteps : aiSteps);
   const contact = lastContact ? Math.floor((now - lastContact) / 1000) : null;
   const stale = offline || contact === null || contact > 15;
   return <div className="wf-progress-panel" role="status" aria-live="polite">
     <div className="wf-progress-head"><span className="status-dot pulse"/><strong>{stages[project.stage] ?? 'Procesando'}…</strong><span className="wf-clock" aria-label="Tiempo transcurrido">{clock(stageSeconds)}</span></div>
-    {project.stage === 'interpreting' ? <ol className="wf-ai-steps">{aiSteps.map((label, i) => {
+    {showSteps ? <ol className="wf-ai-steps">{steps.map((label, i) => {
       const n = i + 1, state = !activity ? (i === 0 ? 'active' : '') : n < activity.step ? 'done' : n === activity.step ? 'active' : '';
       return <li key={label} className={state}><span className="wf-ai-mark">{state === 'done' ? '✓' : n}</span><span>{label}{state === 'active' && activity?.attempt && activity.attempt > 1 ? ` · corrección ${activity.attempt}` : ''}</span>{state === 'active' ? <span className="wf-clock">{activity ? clock(since(activity.started_at, now)) : 'preparando…'}</span> : null}</li>;
     })}</ol> : null}
-    <p className="wf-muted">Duración habitual: {expected[project.stage] ?? 'unos minutos'}. El proceso continúa en el servidor aunque cierres esta página o empieces otro plano.</p>
+    <p className="wf-muted">Duración habitual: {cad && project.stage === 'interpreting' ? '1–4 minutos (lectura local y, si hay dudas, una consulta a la IA)' : expected[project.stage] ?? 'unos minutos'}. El proceso continúa en el servidor aunque cierres esta página o empieces otro plano.</p>
     <p className={`wf-heartbeat ${stale ? 'stale' : ''}`}>{stale ? 'Sin respuesta del servidor; reintentando…' : `Servidor activo · comprobado hace ${contact} s`}</p>
   </div>;
 }
@@ -77,15 +93,87 @@ function localIssues(draft: Draft): string[] {
   return result;
 }
 
-function PlanOverlay({ page, entities, faint, onSelect, selected }: { page: Page; entities: Entity[]; faint: boolean; onSelect?: (id: string) => void; selected?: string }) {
+function PlanOverlay({ page, entities, faint, onSelect, selected, pending }: { page: Page; entities: Entity[]; faint: boolean; onSelect?: (id: string) => void; selected?: string; pending?: Pending[] }) {
   const order: Kind[] = ['slab', 'room', 'wall', 'furniture', 'window', 'door', 'roof'];
   const sorted = [...entities].sort((a, b) => order.indexOf(a.kind) - order.indexOf(b.kind));
   return <svg role="img" aria-label="Interpretación de la IA sobre el plano" viewBox={`0 0 ${page.width} ${page.height}`} className="wf-overlay">
     <image href={page.image_url} width={page.width} height={page.height} opacity={faint ? 0.22 : 1} />
     {sorted.map(e => <polygon key={e.id} points={e.polygon.map(p => p.join(',')).join(' ')} fill={kindColors[e.kind]} stroke={kindColors[e.kind]} className={`wf-ai-shape wf-ai-${e.kind} ${selected === e.id ? 'selected' : ''}`} onClick={onSelect ? () => onSelect(e.id) : undefined}><title>{labels[e.kind]}{e.name ? ` · ${e.name.split(' / ').pop()}` : ''}{e.style ? ` · ${e.style}` : ''}</title></polygon>)}
     {/* Furniture footprints are ordered back-left, back-right, front-right, front-left: the arrow shows the front. */}
-    {sorted.filter(e => e.kind === 'furniture' && e.polygon.length === 4).map(e => { const [, , fr, fl] = e.polygon; const cx = e.polygon.reduce((a, p) => a + p[0], 0) / 4, cy = e.polygon.reduce((a, p) => a + p[1], 0) / 4; const fx = (fr[0] + fl[0]) / 2, fy = (fr[1] + fl[1]) / 2; return <g key={`${e.id}-front`} className="wf-front"><line x1={cx} y1={cy} x2={fx} y2={fy} /><circle cx={fx} cy={fy} r={2.2} /></g>; })}
+    {sorted.filter(e => e.kind === 'furniture' && e.polygon.length === 4).map(e => { const [, , fr, fl] = e.polygon; const cx = e.polygon.reduce((a, p) => a + p[0], 0) / 4, cy = e.polygon.reduce((a, p) => a + p[1], 0) / 4; const fx = (fr[0] + fl[0]) / 2, fy = (fr[1] + fl[1]) / 2; return <g key={`${e.id}-front`} className="wf-front"><line x1={cx} y1={cy} x2={fx} y2={fy} /><circle cx={fx} cy={fy} r={Math.max(page.width, page.height) / 380} /></g>; })}
+    {(pending ?? []).filter(p => p.polygon?.length).map(p => <polygon key={'pending-' + p.id} className="wf-pending-shape" points={(p.polygon ?? []).map(q => q.join(',')).join(' ')}><title>Pendiente · {p.label}</title></polygon>)}
   </svg>;
+}
+
+type Answer = Record<string, string>;
+const frontOptions = ['up', 'down', 'left', 'right'];
+
+function answerReady(p: Pending, a?: Answer): boolean {
+  if (!a) return false;
+  switch (p.type) {
+    case 'furniture': return !!a.kind && !!a.front;
+    case 'front': return !!a.front;
+    case 'opening': return !!a.kind && (a.kind === 'none' || !!a.style);
+    case 'orphan_opening': return 'gap' in a;
+    case 'room': return !!a.name?.trim();
+    case 'layer': return a.walls === 'true' || a.walls === 'false';
+    case 'hatch': return !!a.finish;
+    default: return false;
+  }
+}
+
+function answerPayload(p: Pending, a: Answer): Record<string, unknown> {
+  switch (p.type) {
+    case 'furniture': return { kind: a.kind, name: (furnitureKinds[a.kind] ?? a.kind).replace(/ \(.*\)$/, ''), front: a.front };
+    case 'front': return { front: a.front };
+    case 'opening': return { kind: a.kind, style: a.kind === 'none' ? 'hinged' : a.style };
+    case 'orphan_opening': return { gap: a.gap || null };
+    case 'room': return { name: a.name.trim() };
+    case 'layer': return { walls: a.walls === 'true' };
+    default: return { finish: a.finish };
+  }
+}
+
+function PendingControl({ p, value, set }: { p: Pending; value?: Answer; set: (patch: Answer) => void }) {
+  const select = (key: string, options: [string, string][], placeholder: string) => <select aria-label={`${placeholder} · ${p.label}`} value={value?.[key] ?? ''} onChange={e => set({ [key]: e.target.value })}><option value="">{placeholder}</option>{options.map(([k, l]) => <option key={k} value={k}>{l}</option>)}</select>;
+  const fronts = (withAny: boolean) => select('front', [...frontOptions, ...(withAny ? ['any'] : [])].map(k => [k, `Frente hacia ${sides[k]}`]), 'Orientación…');
+  switch (p.type) {
+    case 'furniture': return <>{select('kind', Object.entries(furnitureKinds), 'Tipo…')}{fronts(true)}</>;
+    case 'front': return fronts(false);
+    case 'opening': return <>{select('kind', [['door', 'Puerta'], ['window', 'Ventana'], ['none', 'Sin hueco (mampara, panel fijo…)']], 'Tipo…')}{value?.kind && value.kind !== 'none' ? select('style', [['hinged', 'Abatible'], ['sliding', 'Corredera'], ['glazed', 'Acristalada'], ['casement', 'Practicable'], ['fixed', 'Fija']], 'Estilo…') : null}</>;
+    case 'orphan_opening': return <select aria-label={`Hueco · ${p.label}`} value={value?.gap ?? '-'} onChange={e => set({ gap: e.target.value === '-' ? '' : e.target.value })}><option value="-" disabled>Hueco…</option><option value="">No modelar</option>{(p.options ?? []).map(o => <option key={o} value={o}>{o}</option>)}</select>;
+    case 'room': return <input aria-label={`Nombre · ${p.label}`} placeholder="Nombre de la estancia" maxLength={80} value={value?.name ?? ''} onChange={e => set({ name: e.target.value })} />;
+    case 'layer': return select('walls', [['true', 'Sí, son muros'], ['false', 'No son muros']], '¿Muros?');
+    default: return select('finish', [['wood', 'Madera'], ['tile', 'Baldosa'], ['stone', 'Piedra'], ['unknown', 'Desconocido']], 'Pavimento…');
+  }
+}
+
+function CadPanel({ cad, busy, onAnswer }: { cad: Cad; busy: boolean; onAnswer: (answers: Record<string, Record<string, unknown>>) => Promise<void> }) {
+  const [answers, setAnswers] = useState<Record<string, Answer>>({});
+  const ready = cad.pending.filter(p => answerReady(p, answers[p.id]));
+  const u = cad.ai.usage;
+  const aiTitle = !cad.ai.items ? 'Sin dudas' : cad.ai.error ? 'No consultada' : cad.ai.cache_hit ? '1 consulta (caché)' : '1 consulta';
+  const aiDetail = !cad.ai.items ? 'El dibujo se ha leído sin dudas: no se ha llamado a la IA.' : cad.ai.error ? cad.ai.error : `${cad.ai.items} dudas · ${u.input.toLocaleString('es')} tokens de entrada, ${u.output.toLocaleString('es')} de salida (${u.reasoning.toLocaleString('es')} de razonamiento) · ≈ ${money(u.cost_usd)}${cad.ai.cache_hit ? ' (ya pagado; 0 tokens nuevos)' : ` · ${cad.ai.seconds} s`} · ${cad.ai.model}`;
+  const columns = (['verified', 'inferred', 'user'] as ReadingStatus[]).map(status => ({ status, list: cad.items.filter(i => i.status === status) })).filter(c => c.status !== 'user' || c.list.length);
+  return <section className="wf-cad" aria-label="Lectura del dibujo DWG">
+    <div className="wf-cad-meta">
+      <div><span>Fuente</span><strong>{cad.format.toUpperCase()}</strong><small>{cad.converter ? `Convertido en este equipo con ${cad.converter}` : 'DXF leído directamente'} · SHA-256 {cad.sha256.slice(0, 12)}…</small></div>
+      <div><span>Unidades y escala</span><strong>{cad.units.name}{cad.units.inferred ? ' (inferidas)' : ''}</strong><small>{cad.units.source}</small></div>
+      <div><span>Planta</span><strong>{cad.plan.name}</strong><small>{cad.plan.size_m.join(' × ')} m · leída en {cad.reading_seconds} s</small></div>
+      <div><span>IA</span><strong>{aiTitle}</strong><small>{aiDetail}</small></div>
+    </div>
+    <div className="wf-cad-columns">
+      {columns.map(({ status, list }) => <div key={status} className={`wf-cad-col ${status}`}><h4>{readingLabels[status]} <span>{list.length}</span></h4>
+        {list.length ? <ul>{list.map(i => <li key={i.id} title={[i.block ? `Bloque ${i.block}` : '', i.layers.join(', '), i.handles.length ? `handles ${i.handles.join(' ')}` : ''].filter(Boolean).join(' · ')}>{i.label}{i.detail ? <small>{i.detail}</small> : null}</li>)}</ul> : <p className="wf-muted">Nada.</p>}</div>)}
+      <div className="wf-cad-col missing"><h4>{readingLabels.missing} <span>{cad.pending.length}</span></h4>
+        {cad.pending.length ? <><p className="wf-muted">El dibujo no lo resuelve{cad.ai.error ? ' y la IA no se ha podido consultar' : ''}. Decide cada punto (marcado en rojo sobre el plano); «arriba» es la parte superior del plano.</p>
+          <ul>{cad.pending.map(p => <li key={p.id}><strong>{p.label}</strong>{p.detail ? <small>{p.detail}</small> : null}{!p.blocking ? <small>Opcional: no impide aprobar.</small> : null}<div className="wf-cad-answer"><PendingControl p={p} value={answers[p.id]} set={patch => setAnswers(a => ({ ...a, [p.id]: { ...a[p.id], ...patch } }))} /></div></li>)}</ul>
+          <button type="button" className="wf-primary" disabled={busy || !ready.length} onClick={() => void onAnswer(Object.fromEntries(ready.map(p => [p.id, answerPayload(p, answers[p.id])])))}>Aplicar {ready.length || ''} respuesta{ready.length === 1 ? '' : 's'}</button></>
+          : <p className="wf-muted">Nada pendiente: todas las lecturas están resueltas.</p>}
+      </div>
+    </div>
+    {cad.notes.length ? <details className="wf-cad-notes"><summary>Notas de la lectura ({cad.notes.length})</summary><ul>{cad.notes.map((n, i) => <li key={i}>{n}</li>)}</ul></details> : null}
+  </section>;
 }
 
 export default function Workflow({ onResult, newRequest = 0 }: { onResult: (url: string | null) => void; newRequest?: number }) {
@@ -160,6 +248,9 @@ export default function Workflow({ onResult, newRequest = 0 }: { onResult: (url:
     return () => clearInterval(timer);
   }, [project?.id, project?.status]);
   const page = project?.pages?.find(p => p.page === draft?.page);
+  const fileFormat = file ? (/\.(pdf|dwg|dxf)$/i.exec(file.name)?.[1] ?? '').toUpperCase() : '';
+  const cad = isCad(project) ? project?.cad : undefined;
+  const blockingPending = cad?.pending.filter(p => p.blocking).length ?? 0;
   const entity = draft?.entities.find(e => e.id === selected);
   const warnings = draft ? localIssues(draft) : [];
   const interpreted = !!draft?.conceptual;
@@ -183,7 +274,7 @@ export default function Workflow({ onResult, newRequest = 0 }: { onResult: (url:
 
   const chooseFile = (event: ChangeEvent<HTMLInputElement>) => {
     const chosen = event.target.files?.[0] ?? null;
-    if (chosen && (!chosen.name.toLowerCase().endsWith('.pdf') || chosen.size > 50 * 1024 * 1024)) { setError('Selecciona un PDF de hasta 50 MB.'); event.target.value=''; setFile(null); return; }
+    if (chosen && (!/\.(pdf|dwg|dxf)$/i.test(chosen.name) || chosen.size > 50 * 1024 * 1024)) { setError('Selecciona un plano PDF, DWG o DXF de hasta 50 MB.'); event.target.value=''; setFile(null); return; }
     setError(''); setFile(chosen);
   };
   const upload = async (event: FormEvent) => {
@@ -237,6 +328,21 @@ export default function Workflow({ onResult, newRequest = 0 }: { onResult: (url:
       if (operation === 'validate' && !result.issues?.length) setNotice('Los datos revisados son coherentes. Ya puedes generar.');
     } catch (reason) { showError(reason); } finally { setWorking(false); }
   };
+  const sendAnswers = async (answers: Record<string, Record<string, unknown>>) => {
+    if (!project || busy) return;
+    setWorking(true); setError(''); setNotice(''); setIssues([]);
+    try {
+      const saved = dirty ? await save() : project;
+      if (!saved) return;
+      remember(await request<Project>(`/api/projects/${saved.id}/answers`, { method: 'PUT', body: JSON.stringify({ revision: saved.revision, answers }) }));
+    } catch (reason) { showError(reason); } finally { setWorking(false); }
+  };
+  const choosePlan = async (plan: number) => {
+    if (!project || busy) return;
+    setWorking(true); setError('');
+    try { remember(await request<Project>(`/api/projects/${project.id}/plan`, { method: 'POST', body: JSON.stringify({ revision: project.revision, plan }) })); }
+    catch (reason) { showError(reason); } finally { setWorking(false); }
+  };
   const updateMaterials = async () => {
     if (!project || busy) return;
     setWorking(true); setError(''); setNotice('');
@@ -267,15 +373,15 @@ export default function Workflow({ onResult, newRequest = 0 }: { onResult: (url:
 
     {!project ? <form className="wf-upload-card" onSubmit={e=>void upload(e)}>
       <label className={`wf-drop ${file ? 'has-file' : ''}`}>
-        <input type="file" accept="application/pdf,.pdf" onChange={chooseFile} disabled={busy} aria-label="Plano en PDF" />
-        <span className="wf-drop-title">{file ? file.name : 'Selecciona el plano en PDF'}</span>
-        <span className="wf-drop-hint">{file ? `${(file.size / 1024 / 1024).toFixed(1)} MB · listo para interpretar` : 'Una planta por PDF, con escala impresa (p. ej. 1:50). Máx. 50 MB.'}</span>
+        <input type="file" accept="application/pdf,.pdf,.dwg,.dxf" onChange={chooseFile} disabled={busy} aria-label="Plano en PDF, DWG o DXF" />
+        <span className="wf-drop-title">{file ? file.name : 'Selecciona el plano en PDF, DWG o DXF'}</span>
+        <span className="wf-drop-hint">{file ? <><span className="wf-format">{fileFormat}</span> {(file.size / 1024 / 1024).toFixed(1)} MB · listo para interpretar</> : 'PDF: una planta con escala impresa (p. ej. 1:50). DWG/DXF: el dibujo en espacio modelo. Máx. 50 MB.'}</span>
       </label>
       <label className="wf-field wf-description"><span>Materiales y acabados <em>(opcional)</em></span>
         <textarea rows={5} maxLength={MAX_DESCRIPTION} value={description} onChange={e=>setDescription(e.target.value)} placeholder="Ej.: suelo de roble natural, paredes blanco roto, muebles de nogal, sofá de lino gris y baños con cerámica blanca." />
         <small>{description.length}/{MAX_DESCRIPTION} · Se aplica a paredes, suelo, puertas, madera, tapicería y cerámica.</small>
       </label>
-      <div className="wf-upload-actions"><button type="submit" className="wf-primary" disabled={!file || busy}>{working ? 'Subiendo…' : 'Interpretar plano →'}</button><small>El PDF se envía a la API de OpenAI para interpretarlo.</small></div>
+      <div className="wf-upload-actions"><button type="submit" className="wf-primary" disabled={!file || busy}>{working ? 'Subiendo…' : 'Interpretar plano →'}</button><small>{fileFormat && fileFormat !== 'PDF' ? `El ${fileFormat} se lee en este equipo; solo las dudas (texto breve) se envían a OpenAI.` : 'El PDF se envía a la API de OpenAI para interpretarlo.'}</small></div>
     </form> : <>
       <div className="wf-job" role="status"><span className={`status-dot ${busy?'pulse':''}`}/><strong>{project.filename}</strong><span>{stages[project.stage] ?? project.stage}</span>
         {project.status==='succeeded'&&project.manifest_url?<button onClick={()=>document.getElementById('explore')?.scrollIntoView({behavior:'smooth'})}>Ver renders ↓</button>:null}
@@ -283,17 +389,19 @@ export default function Workflow({ onResult, newRequest = 0 }: { onResult: (url:
       {rendering ? <div className="wf-progress" aria-label="Progreso de Blender"><div style={{width:`${Math.max(6, renderStages.indexOf(project.stage) / (renderStages.length - 1) * 100)}%`}}/></div> : null}
       {project.error ? <div className="wf-message wf-error" role="alert"><strong>{project.stage === 'generation_failed' ? 'La generación se ha detenido.' : 'Atención'}</strong><p>{project.error}</p>{!busy && project.pages?.length ? <button type="button" onClick={()=>void action('interpret')}>Reintentar interpretación</button> : null}</div> : null}
       {busyStates.has(project.status) ? <Progress project={project} now={now} lastContact={lastContact} offline={offline} /> : null}
+      {project.stage === 'choose_plan' && project.plans?.length ? <div className="wf-plan-choice"><h3>El dibujo contiene {project.plans.length} plantas. ¿Cuál quieres modelar?</h3><img src={`/api/projects/${project.id}/files/overview.png`} alt="Plantas encontradas en el dibujo, numeradas" /><div className="wf-plan-buttons">{project.plans.map(pl => <button key={pl.index} type="button" disabled={working} onClick={() => void choosePlan(pl.index)}><strong>{pl.index + 1}</strong> {pl.name} · {pl.size_m.join(' × ')} m</button>)}</div></div> : null}
     </>}
 
     {project && draft && page ? <div className="wf-review">
       {interpreted ? <>
-        <div className="wf-review-head"><div><span className="eyebrow">02 / REVISIÓN</span><h3>Comprueba la interpretación junto al plano original</h3><p>La IA ha seleccionado muros y huecos sobre los vectores del PDF y propone mobiliario. Si algo no encaja, vuelve a interpretar o usa la edición avanzada.</p></div>
-          <div className="wf-review-cta"><button type="button" className="wf-primary" disabled={busy} onClick={()=>void action('approve')}>{project.status==='succeeded'&&project.result_revision===project.revision?'Regenerar renders':'Aprobar y generar renders'} →</button><small>Las medidas son inferidas a partir del PDF y su escala.</small></div></div>
+        <div className="wf-review-head"><div><span className="eyebrow">02 / REVISIÓN</span><h3>Comprueba la interpretación junto al plano original</h3><p>{cad ? 'Muros, huecos, bloques y textos se han leído directamente del DWG; la IA solo ha resuelto las dudas. Revisa abajo qué es verificado, qué inferido y qué queda pendiente.' : 'La IA ha seleccionado muros y huecos sobre los vectores del PDF y propone mobiliario. Si algo no encaja, vuelve a interpretar o usa la edición avanzada.'}</p></div>
+          <div className="wf-review-cta"><button type="button" className="wf-primary" disabled={busy || blockingPending > 0} onClick={()=>void action('approve')}>{project.status==='succeeded'&&project.result_revision===project.revision?'Regenerar renders':'Aprobar y generar renders'} →</button><small>{blockingPending ? `Resuelve ${blockingPending} lectura${blockingPending === 1 ? '' : 's'} pendiente${blockingPending === 1 ? '' : 's'} para aprobar.` : cad ? 'Medidas leídas del DWG; alturas supuestas.' : 'Las medidas son inferidas a partir del PDF y su escala.'}</small></div></div>
         <div className="wf-compare">
-          <figure><figcaption>Plano original</figcaption><div className="wf-compare-frame"><img src={page.image_url} alt={`Plano original, página ${page.page}`} /></div></figure>
-          <figure><figcaption>Interpretación de la IA <label className="wf-toggle"><input type="checkbox" checked={showAI} onChange={e=>setShowAI(e.target.checked)}/> Superponer</label></figcaption><div className="wf-compare-frame"><PlanOverlay page={page} entities={showAI ? draft.entities : []} faint={showAI} /></div></figure>
+          <figure><figcaption>{cad ? `Dibujo ${cad.format.toUpperCase()} (vista local del archivo)` : 'Plano original'}</figcaption><div className="wf-compare-frame"><img src={page.image_url} alt={cad ? 'Dibujo DWG original' : `Plano original, página ${page.page}`} /></div></figure>
+          <figure><figcaption>Interpretación de la IA <label className="wf-toggle"><input type="checkbox" checked={showAI} onChange={e=>setShowAI(e.target.checked)}/> Superponer</label></figcaption><div className="wf-compare-frame"><PlanOverlay page={page} entities={showAI ? draft.entities : []} faint={showAI} pending={cad?.pending} /></div></figure>
         </div>
         <p className="wf-muted wf-legend-note">Las flechas de los muebles indican su frente (orientación).</p><ul className="wf-legend" aria-label="Elementos interpretados">{(['wall','door','window','room','furniture'] as Kind[]).map(k=><li key={k}><span style={{background:kindColors[k]}}/>{counts[k] ?? 0} {plural[k]}</li>)}</ul>
+        {cad ? <CadPanel key={`${project.id}-${project.revision}`} cad={cad} busy={busy} onAnswer={sendAnswers} /> : null}
         <div className="wf-review-grid">
           <section><h4>Estancias</h4>{rooms.length ? <ul className="wf-chips">{rooms.map((r, i)=><li key={`${r}-${i}`}>{r}</li>)}</ul> : <p className="wf-muted">No se delimitaron estancias cerradas.</p>}</section>
           <section><h4>Materiales <small className="wf-muted">· estilo lujo minimalista</small></h4>
