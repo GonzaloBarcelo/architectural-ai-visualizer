@@ -199,6 +199,33 @@ def test_several_drawn_plans_are_listed_for_the_user(tmp_path):
     assert all(p["size_m"] == [6.0, 4.0] for p in plans)
 
 
+def test_an_entity_spanning_two_plans_only_adds_its_part_over_the_chosen_plan(tmp_path):
+    path = build(tmp_path / "two.dxf", copies=2)
+    doc = ezdxf.readfile(path)
+    hatch = doc.modelspace().add_hatch(dxfattribs={"layer": "MUROS"})  # one solid fill, both plans
+    for dx in (0, 20000):
+        hatch.paths.add_polyline_path(
+            [(dx, 3800), (dx + 6000, 3800), (dx + 6000, 4000), (dx, 4000)], is_closed=True
+        )
+    doc.saveas(path)
+    doc = R.load(path)
+    units = R.detect_units(doc)
+    for plan in R.detect_plans(doc, units):
+        x0, y0, x1, y1 = plan["bounds"]
+        m = C.PLAN_MARGIN
+        area = Polygon([(x0 - m, y0 - m), (x1 + m, y0 - m), (x1 + m, y1 + m), (x0 - m, y1 + m)])
+        walls = R.read_plan(doc, plan, units)["walls"]
+        assert walls and all(area.contains(w["polygon"]) for w in walls)
+
+
+def test_wall_pieces_never_share_area():
+    a = Polygon([(0, 0), (2, 0), (2, 0.2), (0, 0.2)])
+    b = Polygon([(1.9999, 0), (4, 0), (4, 0.2), (1.9999, 0.2)])  # 0.1 mm sliver over a
+    rest = dwg.exclusive(b, a)
+    assert len(rest) == 1 and rest[0].intersection(a).area < 1e-9
+    assert dwg.exclusive(a, None) == [a]
+
+
 def test_layer_and_block_vocabulary_is_configurable_in_one_place():
     assert C.layer_role("a.secció") == "wall" and C.layer_role("A-WALL") == "wall"
     assert C.layer_role("B-Carpinterias") == "carpentry" and C.layer_role("A-GLAZ") == "window"
@@ -386,3 +413,12 @@ def test_composite_bed_and_l_sofa_blocks_split_into_their_drawn_pieces(tmp_path)
     furniture_doubts = [i for i in dwg.doubts(r)["items"] if i["type"] in ("furniture", "front")]
     assert len(furniture_doubts) == 4 and all(i.get("part_of") for i in furniture_doubts)
     assert by_id
+
+
+def test_sheet_outlines_never_repeat_a_corner():
+    sheet = dwg.Sheet((0, 0, 10, 10))
+    # Two corners 0.001 mm apart round to the same sheet point: a zero-length edge.
+    shape = Polygon([(1, 1), (3, 1), (3.0000001, 1.0000001), (3, 2), (1, 2)])
+    outline = sheet.polygon(shape)
+    assert len(outline) == 4
+    assert all(a != b for a, b in zip(outline, outline[1:] + outline[:1]))

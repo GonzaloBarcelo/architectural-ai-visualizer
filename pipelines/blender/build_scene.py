@@ -115,6 +115,10 @@ def make_palette(finishes):
     return palette
 
 
+def shoelace(polygon):
+    return sum(a[0] * b[1] - b[0] * a[1] for a, b in zip(polygon, polygon[1:] + polygon[:1])) / 2
+
+
 def prism(name, polygon, z, height, collection, mat=None):
     # Enforce CCW, triangulate caps for concave polygons.
     polygon = list(polygon)
@@ -474,12 +478,28 @@ def build(data, output):
         edges = [p[(i + 1) % len(p)] - p[i] for i in range(len(p))]
         short = min(edges, key=lambda e: e.length).normalized()
         center = sum(p, Vector((0, 0))) / len(p)
-        cutpoly = [list(v + short * (0.015 if (v - center).dot(short) > 0 else -0.015)) for v in p]
+        cutpoly = [v + short * (0.015 if (v - center).dot(short) > 0 else -0.015) for v in p]
+        # An opening that fills its host (a lintel/sill band) would leave the cutter's faces
+        # coplanar with the host's ends, floor or top; on rotated walls the exact boolean then
+        # leaves degenerate faces or no hole. The cutter overshoots those faces instead; the
+        # host ends there, so the hole is still exactly the opening.
+        full = abs(abs(shoelace(host["polygon"])) - abs(shoelace(op["polygon"]))) < 1e-4
+        if full:
+            along = Vector((-short.y, short.x))
+            cutpoly = [
+                v + along * (0.015 if (v - center).dot(along) > 0 else -0.015) for v in cutpoly
+            ]
+        bottom = host["elevation"] + op["sill"]
+        top = bottom + op["height"]
+        if full and op["sill"] <= 1e-6:
+            bottom -= 0.01
+        if full and top >= host["elevation"] + host["height"] - 1e-6:
+            top += 0.01
         cutter = prism(
             "_cut_" + op["id"],
-            cutpoly,
-            host["elevation"] + op["sill"],
-            op["height"],
+            [list(v) for v in cutpoly],
+            bottom,
+            top - bottom,
             floors[op["floor_id"]],
         )
         mod = wall.modifiers.new("Opening " + op["id"], "BOOLEAN")

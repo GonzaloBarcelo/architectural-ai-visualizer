@@ -89,6 +89,23 @@ def parts(geom):
     return [p for g in getattr(geom, "geoms", []) for p in parts(g)]
 
 
+def inside(geom, area):
+    """Polygons of ``geom`` within the plan area. One CAD entity (a hatch or polyline) can span
+    several drawn plans; only the part over the chosen plan belongs to it."""
+    if area.contains(geom):
+        return [geom]
+    return [p for p in parts(valid(geom).intersection(area)) if p.area > 1e-4]
+
+
+def segment_inside(a, b, area):
+    """The part of segment a–b within the plan area, or None."""
+    line = LineString([a, b]).intersection(area)
+    if line.is_empty or line.geom_type != "LineString" or line.length < 1e-3:
+        return None
+    (ax, ay), (bx, by) = line.coords[0], line.coords[-1]
+    return (ax, ay), (bx, by)
+
+
 def valid(polygon):
     return unary_union(parts(make_valid(polygon))) if not polygon.is_valid else polygon
 
@@ -867,6 +884,7 @@ def read_plan(doc, plan, units, extra_walls=(), excluded_walls=()):
     x0, y0, x1, y1 = plan["bounds"]
     margin = C.PLAN_MARGIN
     region = (x0 - margin, y0 - margin, x1 + margin, y1 + margin)
+    area = shapely.box(*region)
     _, tolerance = raw_walls(doc, extra_walls, excluded_walls)
     notes = []
 
@@ -899,18 +917,15 @@ def read_plan(doc, plan, units, extra_walls=(), excluded_walls=()):
         for p in polygons:
             p = scaled(p, factor)
             if p.area > 1e-4 and mean_width(p) <= limit:
-                pieces.append((p, e.dxf.handle, layer))
+                pieces += [(q, e.dxf.handle, layer) for q in inside(p, area)]
         if polygons:
             continue  # closed outlines are walls already; only loose lines form line pairs
         for a, b in entity_segments(e, tolerance):
-            segments.append(
-                (
-                    (a[0] * factor, a[1] * factor),
-                    (b[0] * factor, b[1] * factor),
-                    e.dxf.handle,
-                    layer,
-                )
+            kept = segment_inside(
+                (a[0] * factor, a[1] * factor), (b[0] * factor, b[1] * factor), area
             )
+            if kept:
+                segments.append((*kept, e.dxf.handle, layer))
     pieces += line_pair_walls(segments)
     if not pieces:
         raise ValueError("La planta elegida no contiene muros legibles.")
@@ -1024,9 +1039,9 @@ def read_plan(doc, plan, units, extra_walls=(), excluded_walls=()):
     for e in entities:
         if e.dxftype() != "HATCH" or e.dxf.solid_fill or C.layer_role(e.dxf.layer) == "ignored":
             continue
-        for area in (scaled(p, factor) for p in entity_polygons(e, tolerance)):
-            if mean_width(area) > C.PATTERN_WALL_MAX_MEAN_WIDTH:
-                hatches.append((e.dxf.pattern_name, area, e.dxf.handle))
+        for shape in (scaled(p, factor) for p in entity_polygons(e, tolerance)):
+            if mean_width(shape) > C.PATTERN_WALL_MAX_MEAN_WIDTH:
+                hatches += [(e.dxf.pattern_name, q, e.dxf.handle) for q in inside(shape, area)]
     rooms = find_rooms(walls, closures(gaps), texts, hatches)
 
     # Furniture: block references, plus closed outlines drawn on furniture layers.
