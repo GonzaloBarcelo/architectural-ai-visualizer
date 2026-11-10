@@ -6,3 +6,4 @@ Production runs use deterministic headless Blender; MCP and vision are optional.
 Use `uv sync --locked`, `uv run pytest`, `uv run ruff check .`, and `cd site && npm ci && npm run build`.
 Track actual evidence and incomplete work in docs/IMPLEMENTATION_STATUS.md. Feature branches and atomic commits; no forced pushes.
 Generated outputs and credentials are ignored. Only synthetic assets may enter a Site review package.
+Before adding a feature, read docs/AGENT_GUIDE.md (architecture, contracts, how to add features, verification and v1 lessons).
