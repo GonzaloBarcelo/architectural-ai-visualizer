@@ -23,8 +23,9 @@ from shapely.ops import unary_union
 from pipelines.cad import config as C
 from pipelines.cad import read as R
 from pipelines.cad.render import render_region
+from pipelines.common import model_for
 from pipelines.web import furniture as F
-from pipelines.web.grounded import DEFAULT_MODEL, OPENING_SIZES, Calls
+from pipelines.web.grounded import OPENING_SIZES, Calls
 from pipelines.web.review import Draft
 
 log = logging.getLogger(__name__)
@@ -892,7 +893,7 @@ def propose(
     reading = R.read_plan(doc, plan, units)
     payload = doubts(reading)
     reading_seconds = round(time.monotonic() - started, 2)
-    model = os.getenv("OPENAI_MODEL", DEFAULT_MODEL)
+    model = model_for("dwg")
     # The labelled plan image is on by default: in the live comparison (one drawing) it fixed the
     # balcony/gallery openings and kept identical blocks consistent for ~1.2k more input tokens.
     use_image = image if image is not None else os.getenv("AAV_DWG_IMAGE", "1") == "1"

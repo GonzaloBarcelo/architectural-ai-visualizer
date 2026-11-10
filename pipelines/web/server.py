@@ -85,6 +85,15 @@ class CadAnswers(Revision):
     answers: dict[str, dict] = Field(default_factory=dict, max_length=300)
 
 
+def render_setting(name, default, low, high):
+    """Render quality from the environment (CPU-only containers render slower), clamped."""
+    try:
+        value = int(os.getenv(name, default))
+    except ValueError:
+        return default
+    return min(high, max(low, value))
+
+
 def source_matches(fmt, head):
     """Content check of the first upload chunk for the declared format."""
     if fmt == "pdf":
@@ -621,8 +630,8 @@ class Projects:
                 geometry=approved,
                 vision=False,
                 device="auto",
-                resolution=1600,
-                samples=160,
+                resolution=render_setting("AAV_RENDER_RESOLUTION", 1600, 320, 4096),
+                samples=render_setting("AAV_RENDER_SAMPLES", 160, 8, 4096),
                 clay=False,
                 site_assets=None,
                 site_root=self.site_dir,
@@ -1027,6 +1036,12 @@ def configured_app():
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--port", type=int, default=5174)
+    parser.add_argument(
+        "--host",
+        default="127.0.0.1",
+        choices=["127.0.0.1", "0.0.0.0"],
+        help="0.0.0.0 only inside a container; publish the port on the host's 127.0.0.1",
+    )
     parser.add_argument("--data-dir", type=Path, default=ROOT / "outputs/web-projects")
     parser.add_argument("--site-root", type=Path, default=ROOT / "site")
     parser.add_argument(
@@ -1051,7 +1066,7 @@ def main():
         factory=args.reload,
         reload=args.reload,
         reload_dirs=[str(ROOT / "pipelines")] if args.reload else None,
-        host="127.0.0.1",
+        host=args.host,
         port=args.port,
         workers=1,
     )

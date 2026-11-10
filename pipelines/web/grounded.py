@@ -22,7 +22,7 @@ from pydantic import BaseModel
 from shapely.geometry import Point, Polygon, box
 from shapely.ops import unary_union
 
-from pipelines.common import write_json
+from pipelines.common import model_for, write_json
 from pipelines.web import furniture as F
 from pipelines.web.ai import vector_context
 from pipelines.web.review import Draft
@@ -688,7 +688,7 @@ def propose(path, raw, client=None, cache_dir=None, max_calls=3, review=True, pr
         raise ValueError("OpenAI admite aquí PDF de hasta 20 MiB.")
     factor, walls, gaps = catalog(raw)
     page = raw["pages"][0]
-    model = os.getenv("OPENAI_MODEL", DEFAULT_MODEL)
+    model = model_for("plan")
     sha = raw["source"]["sha256"]
     calls = Calls(client, model, cache_dir, path.parent / "ai-audit")
     calls.progress = progress

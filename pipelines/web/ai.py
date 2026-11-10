@@ -10,6 +10,7 @@ from pydantic import BaseModel, ConfigDict
 from shapely.geometry import LineString
 from shapely.ops import polygonize, unary_union
 
+from pipelines.common import model_for
 from pipelines.web.review import Draft
 
 
@@ -91,7 +92,7 @@ def propose(path, raw, client=None):
     if path.stat().st_size > 20 * 1024**2:
         raise ValueError("La interpretación con IA admite PDF de hasta 20 MiB.")
     client = client or OpenAI(timeout=180, max_retries=0)
-    model = os.getenv("OPENAI_MODEL", "gpt-4.1")
+    model = model_for("vision")
     sizes = [p["size_points"] for p in raw["pages"]]
     response = client.responses.parse(
         model=model,

@@ -14,7 +14,7 @@ from typing import Literal
 from openai import OpenAI
 from pydantic import BaseModel, Field
 
-from pipelines.common import write_json
+from pipelines.common import model_for, write_json
 from pipelines.geometry.schema import Finish
 
 PROMPT_VERSION = "finishes-v2"
@@ -68,7 +68,7 @@ def propose_finishes(description, cache_dir: Path, client=None):
     description = (description or "").strip()[:MAX_DESCRIPTION]
     if not description:
         return {}, [], None
-    model = os.getenv("OPENAI_MODEL", "gpt-5.4")
+    model = model_for("materials")
     key = hashlib.sha256(f"{PROMPT_VERSION}:{model}:{description}".encode()).hexdigest()
     cache = Path(cache_dir) / f"finishes-{key}.json"
     if cache.is_file():
