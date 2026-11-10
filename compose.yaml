@@ -1,0 +1,19 @@
+# docker compose up -d --build   →   http://127.0.0.1:5174 (same address as the native server)
+services:
+  app:
+    build:
+      context: .
+      args:
+        AAV_REVISION: ${AAV_REVISION:-unknown}
+    image: gonzalez-cardona/visualizer:latest
+    platform: linux/amd64
+    env_file: .env
+    ports:
+      # Published on the host's loopback only: the app is local and has no login.
+      - "127.0.0.1:5174:5174"
+    volumes:
+      - aav-data:/data
+    restart: unless-stopped
+
+volumes:
+  aav-data:

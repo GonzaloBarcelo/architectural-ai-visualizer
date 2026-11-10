@@ -1,0 +1,20 @@
+# Only source enters the image: no secrets, client drawings, outputs or local environments.
+.env
+.env.*
+!.env.example
+.git
+.venv
+**/__pycache__
+.pytest_cache
+.ruff_cache
+outputs
+blueprints
+blueprints_test
+dwg_test
+agents
+site/node_modules
+site/dist
+site/public/project
+site/test-results
+*.blend*
+.DS_Store

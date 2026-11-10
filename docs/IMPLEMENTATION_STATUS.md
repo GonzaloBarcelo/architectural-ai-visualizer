@@ -1,3 +1,22 @@
+# Docker image — 2026-11-10 (Claude Code, branch `feature/docker`)
+
+The whole app runs from one image, `gonzalez-cardona/visualizer`: the FastAPI server, Blender 4.5.9 LTS (headless, Cycles on CPU), LibreDWG `dwg2dxf` 0.14 compiled from source, Node 24 with the site build and the GLB scripts, fonts for DWG plan sheets, and the locked Python environment (`uv sync --locked --no-dev`). It runs as a non-root user, stores projects in the `/data` volume and publishes on the host's `127.0.0.1:5174`, the same address as the native server. `OPENAI_API_KEY` and every model come from `.env` at run time and never enter the image (`.dockerignore` also excludes outputs, client drawings and local environments).
+
+| Area | Evidence |
+| --- | --- |
+| Build | `docker build --platform linux/amd64` succeeds; image 1.11 GB |
+| Tools inside | Blender 4.5.9 LTS, LibreDWG dwg2dxf 0.14, Node 24, ezdxf drawing with fonts, baked code revision |
+| PDF end to end in the container | EA_01_MOD_1.pdf: interpretation from the AI cache, approval, Blender on CPU, **QA 539/539**, 6 renders and GLB served (800 px / 32 samples test quality, 217 s) |
+| DWG in the container | Converted and read deterministically with the same 47 doubts as on macOS. Without a key the doubts stay pending and approval is blocked (as designed). The cached macOS answer is not reused because the labelled plan image is drawn with Linux fonts, so its cache key differs: the container makes its own DWG call (~$0.15) |
+| Models | One `.env` setting per purpose: `OPENAI_PLAN_MODEL`, `OPENAI_DWG_MODEL`, `OPENAI_MATERIALS_MODEL`, `OPENAI_IMAGE_MODEL`, `OPENAI_VISION_MODEL` (`OPENAI_MODEL` remains a shared fallback) |
+
+## Limits
+
+- Blender publishes Linux builds for x86-64 only, so on Apple Silicon the image runs under emulation and renders on the CPU (no Metal). Measured: 800 px / 32 samples ≈ 3 min for the final renders; the container default is 1200 px / 64 samples (≈ 13 min estimated) and native quality 1600 / 160 would take about an hour.
+- The live AI enhancement and a live DWG AI call have not yet been run inside the container (no key during this session).
+
+---
+
 # AI enhancement of renders — 2026-11-09 (Claude Code, branch feature/ai-enhancement)
 
 After the Blender renders pass QA and the delivery is in place, each render is sent to the
