@@ -603,6 +603,34 @@ def furniture_evidence(candidates, rooms, wall_union, factor):
     return out
 
 
+MAX_OUTPUT_RETRY = 64000  # output-token budget of the single retry after running out
+
+
+def unanswered(response):
+    """Why a response has no parsed answer: status, incomplete reason, refusal and usage."""
+    details = getattr(response, "incomplete_details", None)
+    reason = getattr(details, "reason", None) if details else None
+    refusal = next(
+        (
+            getattr(part, "refusal", None)
+            for item in getattr(response, "output", None) or []
+            for part in getattr(item, "content", None) or []
+            if getattr(part, "type", None) == "refusal"
+        ),
+        None,
+    )
+    usage = getattr(response, "usage", None)
+    out = getattr(usage, "output_tokens", None) if usage else None
+    parts = [f"status={getattr(response, 'status', None)}"]
+    if reason:
+        parts.append(f"reason={reason}")
+    if refusal:
+        parts.append(f"refusal={str(refusal)[:200]}")
+    if out is not None:
+        parts.append(f"output_tokens={out}")
+    return ", ".join(parts)
+
+
 class Calls:
     """Billed OpenAI calls with an on-disk cache keyed by the exact inputs of each step."""
 
@@ -634,27 +662,40 @@ class Calls:
         if self.progress:
             self.progress(step)
         started = time.monotonic()
-        log.info("OpenAI %s call started (model %s)", step, self.model)
-        response = self.client.responses.parse(
-            model=self.model,
-            store=False,
-            max_output_tokens=self.max_output_tokens,
-            **(
-                {"reasoning": {"effort": self.effort}}
-                if self.model.startswith(("gpt-5", "o"))
-                else {}
-            ),
-            instructions=instructions,
-            input=[{"role": "user", "content": content}],
-            text_format=schema,
-        )
-        if response.output_parsed is None:
-            raise ValueError(f"No structured {step} returned")
+        budget = self.max_output_tokens
+        while True:
+            log.info(
+                "OpenAI %s call started (model %s, %s output tokens)", step, self.model, budget
+            )
+            response = self.client.responses.parse(
+                model=self.model,
+                store=False,
+                max_output_tokens=budget,
+                **(
+                    {"reasoning": {"effort": self.effort}}
+                    if self.model.startswith(("gpt-5", "o"))
+                    else {}
+                ),
+                instructions=instructions,
+                input=[{"role": "user", "content": content}],
+                text_format=schema,
+            )
+            if response.output_parsed is not None:
+                break
+            # Reasoning can use the whole output budget before the answer is written (large
+            # drawings): one retry with a larger budget. Anything else is reported in full.
+            problem = unanswered(response)
+            if "max_output_tokens" in problem and budget < MAX_OUTPUT_RETRY:
+                log.warning("OpenAI %s call ran out of output tokens (%s); retrying", step, problem)
+                budget = min(budget * 2, MAX_OUTPUT_RETRY)
+                continue
+            raise ValueError(f"No structured {step} returned ({problem})")
         meta = {
             "usage": response.usage.model_dump() if response.usage else None,
             "response_id": response.id,
             "seconds": round(time.monotonic() - started, 1),
             "effort": self.effort,
+            "max_output_tokens": budget,
         }
         log.info("OpenAI %s call finished in %.0f s", step, time.monotonic() - started)
         record = {"value": response.output_parsed.model_dump(), "meta": meta, "step": step}

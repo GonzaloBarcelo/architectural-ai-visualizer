@@ -936,7 +936,8 @@ def propose(
         if progress:
             progress("doubts")
         calls = Calls(client, model, cache_dir, audit_dir)
-        calls.effort, calls.max_output_tokens = "medium", 16000
+        # Same budget as the PDF calls: drawings with 100+ doubts exceeded 16k with reasoning.
+        calls.effort, calls.max_output_tokens = "medium", 32000
         png = labelled_image(doc, reading, payload) if use_image else None
         try:
             resolution, meta = resolve(payload, png, calls)
@@ -955,7 +956,8 @@ def propose(
             ai["error"] = (
                 "Sin OPENAI_API_KEY en el servidor: las dudas quedan pendientes para ti."
                 if missing_key
-                else f"La consulta a la IA falló ({type(exc).__name__}); las dudas quedan pendientes."
+                else f"La consulta a la IA falló ({type(exc).__name__}: {str(exc)[:160]}); las dudas "
+                "quedan pendientes. Puedes responderlas tú o volver a interpretar."
             )
     answers = answer_index(ai.get("resolution"), "ai")
     answers.update(answer_index(user_answers, "user"))
