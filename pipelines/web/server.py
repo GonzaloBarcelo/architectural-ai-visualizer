@@ -41,6 +41,7 @@ BUSY = {"queued", "running", "extracting"}
 AI_STEPS = ("selection", "furniture", "review")
 DWG_STEPS = ("reading", "doubts")
 DWG_STEP_LABELS = ["Lectura del DWG", "Consulta de dudas a la IA"]
+READING_FIRST = "Confirma primero la lectura del DWG («La lectura es correcta»)."
 # Accepted sources: extension → format. Content is checked too (magic bytes / DXF header).
 SOURCES = {".pdf": "pdf", ".dwg": "dwg", ".dxf": "dxf"}
 ID_PATTERN = re.compile(r"^[a-f0-9]{32}$")
@@ -365,10 +366,16 @@ class Projects:
             stage="interpreting",
             error=None,
         )
-        self.interpret_cad(ident)
+        # A new plan invalidates answers given for another one.
+        (folder / "cad-ai.json").unlink(missing_ok=True)
+        self.interpret_cad(ident, call_ai=False, check=True)
 
-    def interpret_cad(self, ident, call_ai=True):
-        """Deterministic DWG reading plus at most one AI call for its doubts."""
+    def interpret_cad(self, ident, call_ai=True, check=False):
+        """Deterministic DWG reading plus at most one AI call for its doubts.
+
+        ``check``: reading only, no AI. The user confirms the reading (stage «reading_check»)
+        before the doubts are sent to the AI (``confirm_reading``).
+        """
         try:
             state = self.get(ident)
             folder = self.folder(ident)
@@ -391,7 +398,7 @@ class Projects:
                 )
 
             stored = None
-            if not call_ai and (folder / "cad-ai.json").is_file():
+            if not call_ai and not check and (folder / "cad-ai.json").is_file():
                 stored = json.loads((folder / "cad-ai.json").read_text())
             draft, summary, ai = dwg.propose(
                 folder / state["dxf_file"],
@@ -421,7 +428,11 @@ class Projects:
                     ai_error_type=None,
                 )
                 state.pop("manifest_url", None)
+                if check:
+                    state.update(status="review", stage="reading_check")
                 self.save(state)
+            if check:
+                return
             if (self.get(ident).get("description") or "").strip():
                 self.update(ident, stage="materials")
             self.apply_finishes(ident)
@@ -833,6 +844,20 @@ def create_app(
             projects.executor.submit(projects.interpret, ident)
             return state
 
+    @app.post("/api/projects/{ident}/confirm-reading", status_code=202)
+    def confirm_reading(ident: str, body: Revision):
+        """The user confirms the deterministic DWG reading; only then are its doubts sent to
+        the AI (one call, or none when the drawing leaves no doubts)."""
+        with projects.lock:
+            state = projects.get(ident)
+            projects.check_revision(state, body.revision)
+            if state.get("stage") != "reading_check":
+                raise HTTPException(409, "No hay una lectura del DWG pendiente de confirmar.")
+            state.update(status="running", stage="interpreting", error=None, reading_confirmed=True)
+            projects.save(state)
+            projects.executor.submit(projects.interpret_cad, ident)
+            return state
+
     @app.post("/api/projects/{ident}/plan", status_code=202)
     def choose_plan(ident: str, body: PlanChoice):
         """DWG with several drawn plans: the user picks the one to model."""
@@ -857,6 +882,8 @@ def create_app(
             cad = state.get("cad")
             if not cad:
                 raise HTTPException(409, "Este proyecto no tiene lecturas DWG pendientes.")
+            if state.get("stage") == "reading_check":
+                raise HTTPException(409, READING_FIRST)
             types = {i["id"]: i["type"] for i in cad.get("pending", [])}
             stored = dict(state.get("cad_answers") or {})
             for ident_item, value in body.answers.items():
@@ -914,6 +941,8 @@ def create_app(
                 raise HTTPException(
                     409, "No hay una interpretación de la IA que aprobar; usa la edición manual."
                 )
+            if state.get("stage") == "reading_check":
+                raise HTTPException(409, READING_FIRST)
             blocking = [p for p in (state.get("cad") or {}).get("pending", []) if p["blocking"]]
             if blocking:
                 raise HTTPException(

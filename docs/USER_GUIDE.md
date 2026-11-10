@@ -4,7 +4,11 @@ Además del PDF, puedes subir el plano en **DWG** (AutoCAD) o **DXF**. El dibujo
 
 1. **Sube el plano.** Elige el `.dwg` o `.dxf` (máx. 50 MB). Verás el formato junto al nombre. La descripción de materiales funciona igual que con PDF.
 2. **Elige la planta** si el dibujo contiene varias. El programa muestra una vista numerada de todas.
-3. **Revisa.** A la izquierda tienes el dibujo DWG tal como está en el archivo; a la derecha, la interpretación. Debajo, el panel «Lectura del DWG» muestra:
+3. **Comprueba la lectura del DWG (sin IA).** Antes de llamar a la IA, el programa muestra lo que ha leído él solo: el dibujo a la izquierda, su lectura a la derecha y, debajo, lo leído del DWG y la lista «Dudas para la IA», con el coste estimado de la consulta. Amplía y recorre ambos planos para comparar.
+   - Si es correcta, pulsa **La lectura es correcta · consultar a la IA**: las dudas se envían en una sola consulta (o ninguna, si no hay dudas).
+   - Si la planta no es la que querías, elige otra en **¿Planta equivocada?**; si el archivo no es el bueno, pulsa **Subir otro plano**. En ambos casos no se gasta nada en IA.
+   - Hasta que confirmes no se puede aprobar ni responder dudas.
+4. **Revisa.** A la izquierda tienes el dibujo DWG tal como está en el archivo; a la derecha, la interpretación. Debajo, el panel «Lectura del DWG» muestra:
    - la fuente, el conversor y su versión, y la huella SHA-256 del archivo;
    - las unidades, y si se leyeron del archivo (`$INSUNITS`) o se dedujeron;
    - las fichas de la IA: tokens de entrada y salida y coste estimado.
@@ -16,7 +20,7 @@ Además del PDF, puedes subir el plano en **DWG** (AutoCAD) o **DXF**. El dibujo
    - **Pendiente**: lo que nadie ha resuelto todavía. Aparece en rojo sobre el plano.
 
    Mientras quede algo pendiente, no se puede aprobar. Elige la respuesta en cada punto y pulsa **Aplicar respuestas** (no gasta tokens). «No es mobiliario» y «Sin hueco» sirven para descartar un elemento.
-4. **Aprueba y genera** como con el PDF.
+5. **Aprueba y genera** como con el PDF.
 
 ## Instalar el conversor DWG → DXF
 

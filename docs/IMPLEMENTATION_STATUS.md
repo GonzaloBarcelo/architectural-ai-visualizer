@@ -1,3 +1,11 @@
+# DWG reading check before the AI — 2026-11-10 (Claude Code, branch `feature/docker`)
+
+After the upload (and the plan choice), a DWG is read deterministically and the project stops at the new stage `reading_check`, **with no AI call**. The review shows the drawing, the program's reading («Lectura del programa (sin IA)»), what was read from the DWG and the «Dudas para la IA» with the estimated cost. The user confirms with «La lectura es correcta · consultar a la IA» (`POST /api/projects/{id}/confirm-reading`), switches plan, or uploads another file. Approval and answers are refused (409) until the reading is confirmed; choosing another plan discards answers stored for the previous one.
+
+Evidence: API test (upload → `reading_check` with `ai.called = false` → approve/answers 409 → confirm → doubts call → review; plan switch from the check). Live on the Torrelavit DWG through a test server and headless Chrome: 44 doubts listed, no AI call before confirming, confirming ran the doubts step and opened the normal review. A `#project=<id>` link opened in a tab that already shows the app now switches project. 149 Python tests and the site build pass.
+
+---
+
 # Review readability and DWG robustness — 2026-11-10 (Claude Code, branch `feature/docker`)
 
 - **DWG with two drawn plans** (Torrelavit test, `dwg` with 2 plans 1.56 m apart): approval failed with «La interpretación no es coherente» because one wall hatch spanning both plans added the other plan's walls outside the review sheet (19 off-sheet walls). Wall, line-pair and floor-hatch geometry is now clipped to the chosen plan.

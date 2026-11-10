@@ -32,7 +32,7 @@ const kindColors: Record<Kind, string> = { wall: '#2f3a2a', slab: '#c9b48a', roo
 const finishLabels: Record<string, string> = { walls: 'Paredes', floor: 'Suelo', tile: 'Baños', doors: 'Puertas y armarios', joinery: 'Carpintería exterior', furniture_wood: 'Madera de muebles', upholstery: 'Tapicería', stone: 'Piedra / encimeras', ceramic: 'Sanitarios', metal: 'Metal / grifería' };
 const floorLabels: Record<string, string> = { wood: 'madera', tile: 'baldosa', stone: 'piedra' };
 const busyStates = new Set(['extracting', 'queued', 'running']);
-const stages: Record<string, string> = { reading_dwg: 'Convirtiendo y leyendo el DWG', choose_plan: 'Elige la planta que quieres modelar', resolving: 'Aplicando tus respuestas', extracting: 'Leyendo el PDF', interpreting: 'La IA está interpretando el plano', materials: 'Interpretando la descripción de materiales', validating_geometry: 'Validando geometría', modeling: 'Modelando en Blender', preview_qa: 'Comprobando la escena', rendering: 'Renderizando con Blender', final_qa: 'Comprobando las imágenes', exporting: 'Exportando el modelo 3D', enhancing: 'Mejorando los renders con IA', completed: 'Renders listos', queued: 'En cola', review: 'Pendiente de revisión', generation_failed: 'Error de generación', extraction_failed: 'Error al leer el PDF', interrupted: 'Proceso interrumpido' };
+const stages: Record<string, string> = { reading_dwg: 'Convirtiendo y leyendo el DWG', reading_check: 'Comprueba la lectura del DWG', choose_plan: 'Elige la planta que quieres modelar', resolving: 'Aplicando tus respuestas', extracting: 'Leyendo el PDF', interpreting: 'La IA está interpretando el plano', materials: 'Interpretando la descripción de materiales', validating_geometry: 'Validando geometría', modeling: 'Modelando en Blender', preview_qa: 'Comprobando la escena', rendering: 'Renderizando con Blender', final_qa: 'Comprobando las imágenes', exporting: 'Exportando el modelo 3D', enhancing: 'Mejorando los renders con IA', completed: 'Renders listos', queued: 'En cola', review: 'Pendiente de revisión', generation_failed: 'Error de generación', extraction_failed: 'Error al leer el PDF', interrupted: 'Proceso interrumpido' };
 const phases: Record<string, string> = { extracting: 'Leyendo', review: 'En revisión', queued: 'En cola', running: 'Procesando', succeeded: 'Renders listos', failed: 'Necesita atención' };
 const renderStages = ['queued', 'validating_geometry', 'modeling', 'preview_qa', 'rendering', 'final_qa', 'exporting', 'enhancing', 'completed'];
 const MAX_DESCRIPTION = 1000;
@@ -161,13 +161,13 @@ function PendingControl({ p, value, set }: { p: Pending; value?: Answer; set: (p
   }
 }
 
-function CadPanel({ cad, busy, onAnswer }: { cad: Cad; busy: boolean; onAnswer: (answers: Record<string, Record<string, unknown>>) => Promise<void> }) {
+function CadPanel({ cad, busy, onAnswer, check = false }: { cad: Cad; busy: boolean; onAnswer: (answers: Record<string, Record<string, unknown>>) => Promise<void>; check?: boolean }) {
   const [answers, setAnswers] = useState<Record<string, Answer>>({});
   const ready = cad.pending.filter(p => answerReady(p, answers[p.id]));
   const u = cad.ai.usage;
-  const aiTitle = !cad.ai.items ? 'Sin dudas' : cad.ai.error ? 'No consultada' : cad.ai.cache_hit ? '1 consulta (caché)' : '1 consulta';
-  const aiDetail = !cad.ai.items ? 'El dibujo se ha leído sin dudas: no se ha llamado a la IA.' : cad.ai.error ? cad.ai.error : `${cad.ai.items} dudas · ${u.input.toLocaleString('es')} tokens de entrada, ${u.output.toLocaleString('es')} de salida (${u.reasoning.toLocaleString('es')} de razonamiento) · ≈ ${money(u.cost_usd)}${cad.ai.cache_hit ? ' (ya pagado; 0 tokens nuevos)' : ` · ${cad.ai.seconds} s`} · ${cad.ai.model}`;
-  const columns = (['verified', 'inferred', 'user'] as ReadingStatus[]).map(status => ({ status, list: cad.items.filter(i => i.status === status) })).filter(c => c.status !== 'user' || c.list.length);
+  const aiTitle = check ? (cad.ai.items ? 'Pendiente de tu confirmación' : 'Sin dudas') : !cad.ai.items ? 'Sin dudas' : cad.ai.error ? 'No consultada' : cad.ai.cache_hit ? '1 consulta (caché)' : '1 consulta';
+  const aiDetail = check ? (cad.ai.items ? `${cad.ai.items} dudas irán en una sola consulta a ${cad.ai.model} (≈ $0,10–0,20) cuando confirmes la lectura.` : 'El dibujo se ha leído sin dudas: no hará falta consultar a la IA.') : !cad.ai.items ? 'El dibujo se ha leído sin dudas: no se ha llamado a la IA.' : cad.ai.error ? cad.ai.error : `${cad.ai.items} dudas · ${u.input.toLocaleString('es')} tokens de entrada, ${u.output.toLocaleString('es')} de salida (${u.reasoning.toLocaleString('es')} de razonamiento) · ≈ ${money(u.cost_usd)}${cad.ai.cache_hit ? ' (ya pagado; 0 tokens nuevos)' : ` · ${cad.ai.seconds} s`} · ${cad.ai.model}`;
+  const columns = (['verified', 'inferred', 'user'] as ReadingStatus[]).map(status => ({ status, list: cad.items.filter(i => i.status === status) })).filter(c => (c.status !== 'user' && !(check && c.status === 'inferred')) || c.list.length);
   return <section className="wf-cad" aria-label="Lectura del dibujo DWG">
     <div className="wf-cad-meta">
       <div><span>Fuente</span><strong>{cad.format.toUpperCase()}</strong><small>{cad.converter ? `Convertido en este equipo con ${cad.converter}` : 'DXF leído directamente'} · SHA-256 {cad.sha256.slice(0, 12)}…</small></div>
@@ -178,17 +178,35 @@ function CadPanel({ cad, busy, onAnswer }: { cad: Cad; busy: boolean; onAnswer: 
     <div className="wf-cad-columns">
       {columns.map(({ status, list }) => <div key={status} className={`wf-cad-col ${status}`}><h4>{readingLabels[status]} <span>{list.length}</span></h4>
         {list.length ? <ul>{list.map(i => <li key={i.id} title={[i.block ? `Bloque ${i.block}` : '', i.layers.join(', '), i.handles.length ? `handles ${i.handles.join(' ')}` : ''].filter(Boolean).join(' · ')}>{i.label}{i.detail ? <small>{i.detail}</small> : null}</li>)}</ul> : <p className="wf-muted">Nada.</p>}</div>)}
-      <div className="wf-cad-col missing"><h4>{readingLabels.missing} <span>{cad.pending.length}</span></h4>
+      {check ? <div className="wf-cad-col missing"><h4>Dudas para la IA <span>{cad.pending.length}</span></h4>
+        {cad.pending.length ? <><p className="wf-muted">El dibujo no las resuelve (en rojo sobre el plano). Se enviarán a la IA cuando confirmes la lectura; después podrás corregir lo que quede.</p>
+          <ul>{cad.pending.map(p => <li key={p.id}><strong>{p.label}</strong>{p.detail ? <small>{p.detail}</small> : null}</li>)}</ul></>
+          : <p className="wf-muted">Ninguna: el dibujo se ha leído por completo.</p>}
+      </div> : <div className="wf-cad-col missing"><h4>{readingLabels.missing} <span>{cad.pending.length}</span></h4>
         {cad.pending.length ? <><p className="wf-muted">El dibujo no lo resuelve{cad.ai.error ? ' y la IA no se ha podido consultar' : ''}. Decide cada punto (marcado en rojo sobre el plano); «arriba» es la parte superior del plano.</p>
           <ul>{cad.pending.map(p => <li key={p.id}><strong>{p.label}</strong>{p.detail ? <small>{p.detail}</small> : null}{!p.blocking ? <small>Opcional: no impide aprobar.</small> : null}<div className="wf-cad-answer"><PendingControl p={p} value={answers[p.id]} set={patch => setAnswers(a => ({ ...a, [p.id]: { ...a[p.id], ...patch } }))} /></div></li>)}</ul>
           <button type="button" className="wf-primary" disabled={busy || !ready.length} onClick={() => void onAnswer(Object.fromEntries(ready.map(p => [p.id, answerPayload(p, answers[p.id])])))}>Aplicar {ready.length || ''} respuesta{ready.length === 1 ? '' : 's'}</button></>
           : <p className="wf-muted">Nada pendiente: todas las lecturas están resueltas.</p>}
-      </div>
+      </div>}
     </div>
     {cad.layers?.length ? <details className="wf-cad-notes wf-cad-layers"><summary>Capas del dibujo ({cad.layers.length}; {cad.layers.filter(l => l.status === 'usada').length} usadas, {cad.layers.filter(l => l.status === 'sin uso').length} sin uso)</summary>
       <div className="wf-table-scroll"><table><thead><tr><th>Capa</th><th>Función</th><th>Estado</th><th>Usada para</th><th>Elementos en la planta</th></tr></thead><tbody>{cad.layers.map(l => <tr key={l.layer} className={l.status === 'sin uso' ? 'unused' : ''}><td>{l.layer}</td><td>{l.role ? roleLabels[l.role] ?? l.role : '—'}{l.match && l.match !== 'nombre' ? <small> ({l.match})</small> : null}</td><td>{l.status}</td><td>{l.used.join(', ') || '—'}</td><td>{Object.entries(l.in_plan).map(([t, n]) => `${n} ${t}`).join(', ') || '—'}{l.elsewhere ? <small> · {l.elsewhere} fuera de la planta</small> : null}</td></tr>)}</tbody></table></div></details> : null}
     {cad.notes.length ? <details className="wf-cad-notes"><summary>Notas de la lectura ({cad.notes.length})</summary><ul>{cad.notes.map((n, i) => <li key={i}>{n}</li>)}</ul></details> : null}
   </section>;
+}
+
+function ReadingCheck({ cad, plans, busy, onConfirm, onPlan, onRestart }: { cad: Cad; plans: Plan[]; busy: boolean; onConfirm: () => void; onPlan: (index: number) => void; onRestart: () => void }) {
+  const doubts = cad.ai.items;
+  return <div className="wf-review-head"><div><span className="eyebrow">02 / LECTURA DEL DWG</span><h3>Comprueba que el DWG se ha leído bien</h3>
+      <p>Muros, huecos, estancias y bloques se han leído directamente del dibujo, sin IA. Compáralos con el plano original. {doubts ? `Si la lectura es correcta, las ${doubts} dudas que el dibujo no resuelve se enviarán a la IA en una única consulta.` : 'El dibujo no deja dudas: no hará falta consultar a la IA.'}</p></div>
+    <div className="wf-review-cta">
+      <button type="button" className="wf-primary" disabled={busy} onClick={onConfirm}>{doubts ? 'La lectura es correcta · consultar a la IA' : 'La lectura es correcta · continuar'} →</button>
+      <small>{doubts ? `1 consulta a ${cad.ai.model} · ≈ $0,10–0,20` : 'Sin coste de IA.'}</small>
+      <div className="wf-check-alt">
+        {plans.length > 1 ? <label>¿Planta equivocada? <select aria-label="Elegir otra planta" value={cad.plan.index} disabled={busy} onChange={e => onPlan(Number(e.target.value))}>{plans.map(p => <option key={p.index} value={p.index}>{p.index + 1}. {p.name} ({p.size_m.join(' × ')} m)</option>)}</select></label> : null}
+        <button type="button" disabled={busy} onClick={onRestart}>Subir otro plano</button>
+      </div>
+    </div></div>;
 }
 
 const pct = (v?: number) => typeof v === 'number' ? `${Math.round(v * 100)} %` : '';
@@ -270,6 +288,13 @@ export default function Workflow({ onResult, newRequest = 0 }: { onResult: (url:
     if (id) request<Project>(`/api/projects/${encodeURIComponent(id)}`, {signal:controller.signal}).then(remember).catch(() => {});
     return () => controller.abort();
   }, [refreshProjects, remember]);
+  // A #project=<id> link opened in a tab that already shows the app switches project too.
+  const openLinkedRef = useRef<(id: string) => void>(() => {});
+  useEffect(() => {
+    const onHash = () => { const id = /#project=([a-f0-9]{32})$/.exec(window.location.hash)?.[1]; if (id) openLinkedRef.current(id); };
+    window.addEventListener('hashchange', onHash);
+    return () => window.removeEventListener('hashchange', onHash);
+  }, []);
   useEffect(() => {
     if (!project || !busyStates.has(project.status)) return;
     const controller = new AbortController();
@@ -302,6 +327,7 @@ export default function Workflow({ onResult, newRequest = 0 }: { onResult: (url:
   const entity = draft?.entities.find(e => e.id === selected);
   const warnings = draft ? localIssues(draft) : [];
   const interpreted = !!draft?.conceptual;
+  const readingCheck = !!cad && project?.stage === 'reading_check';
   const rendering = !!project && (project.status === 'queued' || (project.status === 'running' && renderStages.includes(project.stage)));
   const step = !project ? 1 : project.status === 'succeeded' || rendering ? 3 : 2;
   const counts = (draft?.entities ?? []).reduce<Partial<Record<Kind, number>>>((acc, e) => ({...acc, [e.kind]: (acc[e.kind] ?? 0) + 1}), {});
@@ -352,6 +378,7 @@ export default function Workflow({ onResult, newRequest = 0 }: { onResult: (url:
   const newProjectRef = useRef(newProject);
   newProjectRef.current = newProject;
   useEffect(() => { if (newRequest) newProjectRef.current(); }, [newRequest]);
+  openLinkedRef.current = id => { if (id !== project?.id) void openProject(id); };
   const openProject = async (id: string) => {
     if (!id || working || dirty && !window.confirm('Hay cambios sin guardar. ¿Quieres descartarlos y abrir otro proyecto?')) return;
     setWorking(true); setError(''); shownResult.current = ''; onResult(null);
@@ -411,6 +438,12 @@ export default function Workflow({ onResult, newRequest = 0 }: { onResult: (url:
       remember(await request<Project>(`/api/projects/${saved.id}/answers`, { method: 'PUT', body: JSON.stringify({ revision: saved.revision, answers }) }));
     } catch (reason) { showError(reason); } finally { setWorking(false); }
   };
+  const confirmReading = async () => {
+    if (!project || busy) return;
+    setWorking(true); setError(''); setNotice(''); setIssues([]);
+    try { remember(await request<Project>(`/api/projects/${project.id}/confirm-reading`, { method: 'POST', body: JSON.stringify({ revision: project.revision }) })); }
+    catch (reason) { showError(reason); } finally { setWorking(false); }
+  };
   const choosePlan = async (plan: number) => {
     if (!project || busy) return;
     setWorking(true); setError('');
@@ -468,17 +501,17 @@ export default function Workflow({ onResult, newRequest = 0 }: { onResult: (url:
       {project.stage === 'choose_plan' && project.plans?.length ? <div className="wf-plan-choice"><h3>El dibujo contiene {project.plans.length} plantas. ¿Cuál quieres modelar?</h3><img src={`/api/projects/${project.id}/files/overview.png`} alt="Plantas encontradas en el dibujo, numeradas" /><div className="wf-plan-buttons">{project.plans.map(pl => <button key={pl.index} type="button" disabled={working} onClick={() => void choosePlan(pl.index)}><strong>{pl.index + 1}</strong> {pl.name} · {pl.size_m.join(' × ')} m</button>)}</div></div> : null}
     </>}
 
-    {project && draft && page ? <div className="wf-review">
+    {project && draft && page ? <div className={`wf-review ${readingCheck ? 'reading-check' : ''}`}>
       {interpreted ? <>
-        <div className="wf-review-head"><div><span className="eyebrow">02 / REVISIÓN</span><h3>Comprueba la interpretación junto al plano original</h3><p>{cad ? 'Muros, huecos, bloques y textos se han leído directamente del DWG; la IA solo ha resuelto las dudas. Revisa abajo qué es verificado, qué inferido y qué queda pendiente.' : 'La IA ha seleccionado muros y huecos sobre los vectores del PDF y propone mobiliario. Si algo no encaja, vuelve a interpretar o usa la edición avanzada.'}</p></div>
-          <div className="wf-review-cta"><EnhanceOptions project={project} text={locationText} setText={setLocationText} enhance={enhanceChoice} setEnhance={setEnhanceChoice} disabled={busy} /><button type="button" className="wf-primary" disabled={busy || blockingPending > 0} onClick={()=>void approveProject()}>{project.status==='succeeded'&&project.result_revision===project.revision?'Regenerar renders':'Aprobar y generar renders'} →</button><small>{blockingPending ? `Resuelve ${blockingPending} lectura${blockingPending === 1 ? '' : 's'} pendiente${blockingPending === 1 ? '' : 's'} para aprobar.` : cad ? 'Medidas leídas del DWG; alturas supuestas.' : 'Las medidas son inferidas a partir del PDF y su escala.'}</small></div></div>
+        {readingCheck && cad ? <ReadingCheck cad={cad} plans={project.plans ?? cad.plans ?? []} busy={busy} onConfirm={() => void confirmReading()} onPlan={plan => void choosePlan(plan)} onRestart={newProject} /> : <><div className="wf-review-head"><div><span className="eyebrow">02 / REVISIÓN</span><h3>Comprueba la interpretación junto al plano original</h3><p>{cad ? 'Muros, huecos, bloques y textos se han leído directamente del DWG; la IA solo ha resuelto las dudas. Revisa abajo qué es verificado, qué inferido y qué queda pendiente.' : 'La IA ha seleccionado muros y huecos sobre los vectores del PDF y propone mobiliario. Si algo no encaja, vuelve a interpretar o usa la edición avanzada.'}</p></div>
+          <div className="wf-review-cta"><EnhanceOptions project={project} text={locationText} setText={setLocationText} enhance={enhanceChoice} setEnhance={setEnhanceChoice} disabled={busy} /><button type="button" className="wf-primary" disabled={busy || blockingPending > 0} onClick={()=>void approveProject()}>{project.status==='succeeded'&&project.result_revision===project.revision?'Regenerar renders':'Aprobar y generar renders'} →</button><small>{blockingPending ? `Resuelve ${blockingPending} lectura${blockingPending === 1 ? '' : 's'} pendiente${blockingPending === 1 ? '' : 's'} para aprobar.` : cad ? 'Medidas leídas del DWG; alturas supuestas.' : 'Las medidas son inferidas a partir del PDF y su escala.'}</small></div></div></>}
         <div className="wf-compare-bar"><label className="wf-toggle"><input type="checkbox" checked={linkViews} onChange={e=>{setLinkViews(e.target.checked);setSharedView(null);}}/> Sincronizar vistas</label><span className="wf-muted">Rueda o pellizco para ampliar · arrastra para moverte · doble clic acerca</span></div>
         <div className="wf-compare">
           <figure><figcaption>{cad ? `Dibujo ${cad.format.toUpperCase()} (vista local del archivo)` : 'Plano original'}</figcaption><ZoomPane key={`orig-${page.image_url}-${linkViews}`} aspect={page.width / page.height} label="plano original" {...(linkViews ? { view: sharedView, onView: setSharedView } : {})}><img src={page.image_url} alt={cad ? 'Dibujo DWG original' : `Plano original, página ${page.page}`} draggable={false} /></ZoomPane></figure>
-          <figure><figcaption>Interpretación de la IA <label className="wf-toggle"><input type="checkbox" checked={showAI} onChange={e=>setShowAI(e.target.checked)}/> Superponer</label></figcaption><ZoomPane key={`ai-${page.image_url}-${linkViews}`} aspect={page.width / page.height} label="interpretación de la IA" {...(linkViews ? { view: sharedView, onView: setSharedView } : {})}><PlanOverlay page={page} entities={showAI ? draft.entities : []} faint={showAI} pending={cad?.pending} /></ZoomPane></figure>
+          <figure><figcaption>{readingCheck ? 'Lectura del programa (sin IA)' : 'Interpretación de la IA'} <label className="wf-toggle"><input type="checkbox" checked={showAI} onChange={e=>setShowAI(e.target.checked)}/> Superponer</label></figcaption><ZoomPane key={`ai-${page.image_url}-${linkViews}`} aspect={page.width / page.height} label="interpretación de la IA" {...(linkViews ? { view: sharedView, onView: setSharedView } : {})}><PlanOverlay page={page} entities={showAI ? draft.entities : []} faint={showAI} pending={cad?.pending} /></ZoomPane></figure>
         </div>
         <p className="wf-muted wf-legend-note">Las flechas de los muebles indican su frente (orientación).</p><ul className="wf-legend" aria-label="Elementos interpretados">{(['wall','door','window','room','furniture'] as Kind[]).map(k=><li key={k}><span style={{background:kindColors[k]}}/>{counts[k] ?? 0} {plural[k]}</li>)}</ul>
-        {cad ? <CadPanel key={`${project.id}-${project.revision}`} cad={cad} busy={busy} onAnswer={sendAnswers} /> : null}
+        {cad ? <CadPanel key={`${project.id}-${project.revision}`} cad={cad} busy={busy} onAnswer={sendAnswers} check={readingCheck} /> : null}
         <div className="wf-review-grid">
           <section><h4>Estancias</h4>{rooms.length ? <ul className="wf-chips">{rooms.map((r, i)=><li key={`${r}-${i}`}>{r}</li>)}</ul> : <p className="wf-muted">No se delimitaron estancias cerradas.</p>}</section>
           <section><h4>Materiales <small className="wf-muted">· estilo lujo minimalista</small></h4>

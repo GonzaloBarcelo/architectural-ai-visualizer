@@ -57,12 +57,25 @@ def test_dwg_upload_review_answer_approve_and_generate(app, tmp_path):
         project = upload(client)
         assert project["status"] == "review", project.get("error")
         assert project["source_format"] == "dwg" and project["source_file"] == "source.dwg"
+        # Middle step: the deterministic reading waits for the user before any AI call.
+        assert project["stage"] == "reading_check"
         cad = project["cad"]
         assert cad["converter"] == "LibreDWG dwg2dxf 0.14"
         assert cad["units"]["source"].startswith("$INSUNITS")
-        assert "OPENAI_API_KEY" in cad["ai"]["error"]  # no key: doubts left to the user
+        assert cad["ai"]["called"] is False and cad["ai"]["error"] is None
+        assert cad["ai"]["items"] == len(cad["doubts"]) > 0
         assert client.get(project["pages"][0]["image_url"]).status_code == 200
         route = f"/api/projects/{project['id']}"
+        early = {"revision": project["revision"]}
+        assert client.post(route + "/approve", json=early).status_code == 409
+        assert client.put(route + "/answers", json={**early, "answers": {}}).status_code == 409
+        confirmed = client.post(route + "/confirm-reading", json=early)
+        assert confirmed.status_code == 202, confirmed.text
+        assert client.post(route + "/confirm-reading", json=early).status_code == 409  # stale
+        project = wait_project(client, project["id"], ("review", "failed"))
+        assert project["stage"] == "review" and project["reading_confirmed"] is True
+        cad = project["cad"]
+        assert "OPENAI_API_KEY" in cad["ai"]["error"]  # no key: doubts left to the user
         refused = client.post(route + "/approve", json={"revision": project["revision"]})
         assert refused.status_code == 409 and "sin resolver" in refused.text
         item = cad["pending"][0]["id"]
@@ -144,5 +157,12 @@ def test_several_plans_wait_for_the_users_choice(app, tmp_path):
         assert response.status_code == 202, response.text
         project = wait_project(client, project["id"], ("review", "failed"))
         assert project["status"] == "review" and project["plan_index"] == 1
-        assert project["cad"]["plan"]["index"] == 1
+        assert project["stage"] == "reading_check" and project["cad"]["plan"]["index"] == 1
+        # From the reading check the user can still switch to the other plan.
+        response = client.post(
+            f"/api/projects/{project['id']}/plan", json={"revision": project["revision"], "plan": 0}
+        )
+        assert response.status_code == 202, response.text
+        project = wait_project(client, project["id"], ("review", "failed"))
+        assert project["stage"] == "reading_check" and project["cad"]["plan"]["index"] == 0
         assert json.loads(json.dumps(project["draft"]))["entities"]

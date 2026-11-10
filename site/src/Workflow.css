@@ -100,3 +100,9 @@
 @media(max-width:760px){.wf-cad-meta{grid-template-columns:1fr 1fr}}@media(max-width:480px){.wf-cad-meta{grid-template-columns:1fr}.wf-cad{padding:12px}}
 .wf-table-scroll{overflow:auto;max-height:360px;margin-top:8px}.wf-cad-layers table{border-collapse:collapse;width:100%;font-size:11px;background:#fff}.wf-cad-layers th,.wf-cad-layers td{text-align:left;padding:5px 8px;border-bottom:1px solid #ecece4;vertical-align:top}.wf-cad-layers th{font-weight:600;position:sticky;top:0;background:#f6f6f0}.wf-cad-layers tr.unused td{color:#8a5a2b}.wf-cad-layers small{color:var(--muted)}
 .wf-enhance-options{align-self:stretch;text-align:left;display:flex;flex-direction:column;gap:10px;margin-bottom:14px;max-width:420px}.wf-enhance-options input:not([type]){width:100%}.wf-enhance-options small{color:var(--muted,#707168);font-size:10px;line-height:1.5}.wf-enhance-options em{font-style:normal;color:var(--muted,#707168);font-size:10px}.wf-ai-usage{font-size:10px;color:#6c7062;margin:6px 0 0}.wf-ai-usage .wf-warn{color:#8a5a2e}
+
+.wf-review.reading-check .wf-review-grid,.wf-review.reading-check .wf-advanced{display:none}
+.wf-check-alt{display:flex;align-items:center;gap:10px;flex-wrap:wrap;justify-content:flex-end;margin-top:6px;font-size:11px}
+.wf-check-alt label{display:flex;align-items:center;gap:6px}
+.wf-check-alt select{font:inherit;font-size:11px;padding:7px;border:1px solid var(--line);background:#fff;max-width:260px}
+.wf-check-alt button{font-size:11px;padding:7px 12px}
