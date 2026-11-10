@@ -1,3 +1,11 @@
+# AI call robustness, any layer names, mislabelled units — 2026-11-10 (Claude Code, branch `feature/docker`)
+
+- **«No structured doubts returned»** (Torrelavit PROPUESTA, 113 doubts): with medium reasoning the 16k output budget was spent before the answer was written. The DWG call now has 32k (as the PDF calls), an answer cut off by the budget is retried once with 64k, and any other failure reports status, incomplete reason, refusal and output tokens. The calls already use OpenAI structured outputs (`responses.parse` with strict Pydantic schemas); LangChain's `with_structured_output` wraps the same feature and would not avoid the budget limit, so it was not added.
+- **Any layer names**: when no layer matches the wall vocabulary, wall layers are inferred from geometry (layers dominated by thin solid fills / closed outlines, under 3 % of the drawing size), used for units, plans and reading, marked inferred and explained in the reading notes. Test: a plan with walls on `CAPA_07` reads fully.
+- **Mislabelled units**: `TORRELAVIT_PROPUESTA_MAR.dwg` declares mm but is drawn in metres; it used to stop. When exactly one unit fits the geometry it is used, flagged as inferred («el archivo declara mm, pero…») and checked by the user in the reading-check step; when none fits the reading still stops. That drawing now reads: 1 plan 23.4 × 12.3 m, 74 walls, 4 doors, 5 rooms, 8 furniture, 113 doubts.
+
+---
+
 # DWG reading check before the AI — 2026-11-10 (Claude Code, branch `feature/docker`)
 
 After the upload (and the plan choice), a DWG is read deterministically and the project stops at the new stage `reading_check`, **with no AI call**. The review shows the drawing, the program's reading («Lectura del programa (sin IA)»), what was read from the DWG and the «Dudas para la IA» with the estimated cost. The user confirms with «La lectura es correcta · consultar a la IA» (`POST /api/projects/{id}/confirm-reading`), switches plan, or uploads another file. Approval and answers are refused (409) until the reading is confirmed; choosing another plan discards answers stored for the previous one.

@@ -60,10 +60,31 @@ def test_missing_insunits_are_inferred_from_walls_extents_and_dimensions(tmp_pat
     assert "inferidas" in units["source"] and "cotas" in units["source"]
 
 
-def test_declared_units_that_contradict_the_drawing_stop(tmp_path):
+def test_mislabelled_units_are_inferred_and_flagged_when_only_one_unit_fits(tmp_path):
     doc = R.load(build(tmp_path / "wrong.dxf", insunits=6))  # metres declared, mm drawn
+    units = R.detect_units(doc)
+    assert units["metres_per_unit"] == 0.001 and units["inferred"] is True
+    assert units["declared"] == "m" and "declara m" in units["source"]
+
+
+def test_declared_units_that_no_unit_explains_still_stop(tmp_path):
+    doc = ezdxf.new()
+    doc.header["$INSUNITS"] = 6
+    speck = Polygon([(0, 0), (1e-5, 0), (1e-5, 1e-6), (0, 1e-6)])
     with pytest.raises(ValueError, match="no son coherentes"):
-        R.detect_units(doc)
+        R.detect_units(doc, wall_polygons=[speck], dimensions=[])
+
+
+def test_wall_layers_with_any_name_are_found_by_their_geometry(tmp_path):
+    path = build(tmp_path / "office.dxf", wall_layer="CAPA_07")  # no wall vocabulary
+    doc = R.load(path)
+    assert R.raw_walls(doc)[0] == []  # nothing is named as walls
+    assert R.inferred_wall_layers(doc) == ["CAPA_07"]
+    draft, summary, _ = dwg.propose(path, SOURCE, call_ai=False)
+    walls = [e for e in draft["entities"] if e["kind"] == "wall"]
+    assert walls and summary["units"]["metres_per_unit"] == 0.001
+    assert any("CAPA_07" in n for n in summary["notes"])
+    assert R.inferred_wall_layers(R.load(build(tmp_path / "named.dxf"))) == []
 
 
 def test_ambiguous_units_are_never_guessed(tmp_path):

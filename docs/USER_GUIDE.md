@@ -33,6 +33,11 @@ El programa usa ODA si está instalado y, si no, LibreDWG. Si falta un conversor
 
 ## Cómo preparar el DWG para la mejor lectura
 
+Cualquier nombre de capa es válido. Si ninguna capa se llama como muros, el programa elige como muros las capas cuyo contenido es fino y continuo (rellenos sólidos o contornos cerrados), lo indica en las notas de la lectura y lo marca como inferido; compruébalo en el paso «Comprueba la lectura del DWG». Las capas con geometría de muro junto a los muros, pero con otro nombre, se preguntan como dudas.
+
+Si las unidades del archivo no encajan con el dibujo (p. ej. un plano dibujado en metros guardado como milímetros) y solo una unidad es coherente, se usa esa unidad, se avisa («el archivo declara mm, pero…») y lo compruebas también en ese paso. Si ninguna unidad es coherente, la lectura se detiene y pide corregir `UNITS`.
+
+
 - **Unidades:** define `UNITS`/`$INSUNITS` (mm, cm o m). Si no están definidas, se deducen del grosor de los muros, del tamaño y de las cotas, y se avisa. Si las declaradas no encajan con el dibujo, el plano se rechaza.
 - **Espacio modelo:** se lee solo el espacio modelo, nunca las presentaciones. El cajetín y los rótulos lejanos quedan fuera porque se mira solo la planta. Si hay varias plantas dibujadas, se te pregunta cuál usar.
 - **Capas:** se leen todas, también las apagadas, que se listan pero no se usan. El nombre se compara sin acentos ni mayúsculas, y se admiten erratas cercanas: `a.venatana` se lee como ventanas y se indica en la lista de capas. Nombres que funcionan:

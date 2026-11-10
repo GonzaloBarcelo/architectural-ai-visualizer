@@ -234,6 +234,44 @@ def raw_walls(doc, extra=(), excluded=()):
     return out, tolerance
 
 
+THIN_SHARE = 0.03  # a wall is thinner than 3 % of the whole drawing (any unit)
+INFERRED_SHARE = 0.3  # layers with at least this share of the best layer's thin area
+
+
+def inferred_wall_layers(doc):
+    """Wall layers chosen by geometry when no layer is named as walls.
+
+    Layer naming is not standard between offices. When no layer matches the wall vocabulary,
+    the layers whose solid fills and closed outlines are mostly thin (walls, not rooms or
+    furniture) are used instead; they are reported as inferred and checked by the user.
+    """
+    if raw_walls(doc)[0]:
+        return []
+    hidden = hidden_layers(doc)
+    shapes = [
+        e
+        for e in doc.modelspace()
+        if e.dxf.layer not in hidden
+        and e.dxftype() in ("HATCH", "LWPOLYLINE", "POLYLINE")
+        and C.layer_role(e.dxf.layer) not in ("ignored", "furniture", "door", "window", "carpentry")
+        and not (e.dxftype() == "HATCH" and not e.dxf.solid_fill)
+    ]
+    extents = ebbox.extents(shapes, fast=True)
+    if not extents.has_data:
+        return []
+    size = max(extents.size.x, extents.size.y) or 1.0
+    tolerance = size / 20000
+    thin = Counter()
+    for e in shapes:
+        for p in entity_polygons(e, tolerance):
+            if p.area > 0 and mean_width(p) <= size * THIN_SHARE:
+                thin[e.dxf.layer] += p.area * (2 if e.dxftype() == "HATCH" else 1)
+    if not thin:
+        return []
+    best = thin.most_common(1)[0][1]
+    return sorted(layer for layer, area in thin.items() if area >= INFERRED_SHARE * best)
+
+
 def detect_units(doc, wall_polygons=None, dimensions=None):
     """Metres per drawing unit and where that came from. Never guessed silently."""
     if wall_polygons is None:
@@ -267,8 +305,25 @@ def detect_units(doc, wall_polygons=None, dimensions=None):
         return all(checks) if checks else False
 
     code = doc.header.get("$INSUNITS", 0)
+    candidates = [(n, f) for n, f in [("mm", 0.001), ("cm", 0.01), ("m", 1.0)] if plausible(f)]
+    evidence = [f"grosor medio de muro {width:.4g}" if width else None]
+    evidence += [f"tamaño {size:.4g}" if size else None]
+    evidence += [f"{len(dimensions)} cotas (mediana {dim:.4g})" if dim else None]
+    found = ", ".join(e for e in evidence if e)
     if code in UNITS:
         name, factor = UNITS[code]
+        if (width or size) and not plausible(factor) and len(candidates) == 1:
+            # A common mislabel (e.g. a plan drawn in metres saved as mm). The geometry fits
+            # exactly one unit: use it, say so, and let the user check it in the review.
+            right, right_factor = candidates[0]
+            return {
+                "name": right,
+                "metres_per_unit": right_factor,
+                "source": f"inferidas: el archivo declara {name} ($INSUNITS = {code}), pero "
+                f"{found} (unidades del dibujo) solo son coherentes con {right}. Compruébalo.",
+                "inferred": True,
+                "declared": name,
+            }
         if (width or size) and not plausible(factor):
             described = ", ".join(
                 f"{label} {value * factor:.3f} m"
@@ -286,17 +341,13 @@ def detect_units(doc, wall_polygons=None, dimensions=None):
             "source": f"$INSUNITS = {code} ({name}) declarado en el archivo",
             "inferred": False,
         }
-    candidates = [(n, f) for n, f in [("mm", 0.001), ("cm", 0.01), ("m", 1.0)] if plausible(f)]
     if len(candidates) == 1:
         name, factor = candidates[0]
-        evidence = [f"grosor medio de muro {width:.4g}" if width else None]
-        evidence += [f"tamaño {size:.4g}" if size else None]
-        evidence += [f"{len(dimensions)} cotas (mediana {dim:.4g})" if dim else None]
         return {
             "name": name,
             "metres_per_unit": factor,
             "source": "inferidas: $INSUNITS sin definir; "
-            + ", ".join(e for e in evidence if e)
+            + found
             + f" (unidades del dibujo) solo son coherentes con {name}",
             "inferred": True,
         }
