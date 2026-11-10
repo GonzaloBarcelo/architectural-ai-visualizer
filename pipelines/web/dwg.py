@@ -1006,7 +1006,8 @@ def plan_sheet(dxf_path, plan_index=0):
     x0, y0, x1, y1 = plan["bounds"]
     m = C.PLAN_MARGIN
     region = (x0 - m, y0 - m, x1 + m, y1 + m)
-    png = render_region(doc, tuple(v / factor for v in region), 2400)
+    # Review sheet: sharp enough to zoom into (the AI gets its own smaller labelled image).
+    png = render_region(doc, tuple(v / factor for v in region), 6000)
     sheet = Sheet(region)
     return png, (sheet.width, sheet.height), plans, units
 

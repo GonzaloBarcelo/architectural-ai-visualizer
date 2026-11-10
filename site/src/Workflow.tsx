@@ -1,6 +1,8 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import type { ChangeEvent, FormEvent, MouseEvent } from 'react';
 import './Workflow.css';
+import ZoomPane from './ZoomPane';
+import type { View } from './ZoomPane';
 
 type Point = [number, number];
 type Kind = 'wall' | 'slab' | 'room' | 'door' | 'window' | 'roof' | 'furniture';
@@ -238,6 +240,8 @@ export default function Workflow({ onResult, newRequest = 0 }: { onResult: (url:
   const [points, setPoints] = useState<Point[]>([]);
   const [candidates, setCandidates] = useState(false);
   const [zoom, setZoom] = useState(1);
+  const [linkViews, setLinkViews] = useState(true);
+  const [sharedView, setSharedView] = useState<View | null>(null);
   const [now, setNow] = useState(() => Date.now());
   const [lastContact, setLastContact] = useState(0);
   const shownResult = useRef('');
@@ -290,6 +294,8 @@ export default function Workflow({ onResult, newRequest = 0 }: { onResult: (url:
     return () => clearInterval(timer);
   }, [project?.id, project?.status]);
   const page = project?.pages?.find(p => p.page === draft?.page);
+  const pageUrl = page?.image_url;
+  useEffect(() => { setSharedView(null); }, [pageUrl]);
   const fileFormat = file ? (/\.(pdf|dwg|dxf)$/i.exec(file.name)?.[1] ?? '').toUpperCase() : '';
   const cad = isCad(project) ? project?.cad : undefined;
   const blockingPending = cad?.pending.filter(p => p.blocking).length ?? 0;
@@ -466,9 +472,10 @@ export default function Workflow({ onResult, newRequest = 0 }: { onResult: (url:
       {interpreted ? <>
         <div className="wf-review-head"><div><span className="eyebrow">02 / REVISIÓN</span><h3>Comprueba la interpretación junto al plano original</h3><p>{cad ? 'Muros, huecos, bloques y textos se han leído directamente del DWG; la IA solo ha resuelto las dudas. Revisa abajo qué es verificado, qué inferido y qué queda pendiente.' : 'La IA ha seleccionado muros y huecos sobre los vectores del PDF y propone mobiliario. Si algo no encaja, vuelve a interpretar o usa la edición avanzada.'}</p></div>
           <div className="wf-review-cta"><EnhanceOptions project={project} text={locationText} setText={setLocationText} enhance={enhanceChoice} setEnhance={setEnhanceChoice} disabled={busy} /><button type="button" className="wf-primary" disabled={busy || blockingPending > 0} onClick={()=>void approveProject()}>{project.status==='succeeded'&&project.result_revision===project.revision?'Regenerar renders':'Aprobar y generar renders'} →</button><small>{blockingPending ? `Resuelve ${blockingPending} lectura${blockingPending === 1 ? '' : 's'} pendiente${blockingPending === 1 ? '' : 's'} para aprobar.` : cad ? 'Medidas leídas del DWG; alturas supuestas.' : 'Las medidas son inferidas a partir del PDF y su escala.'}</small></div></div>
+        <div className="wf-compare-bar"><label className="wf-toggle"><input type="checkbox" checked={linkViews} onChange={e=>{setLinkViews(e.target.checked);setSharedView(null);}}/> Sincronizar vistas</label><span className="wf-muted">Rueda o pellizco para ampliar · arrastra para moverte · doble clic acerca</span></div>
         <div className="wf-compare">
-          <figure><figcaption>{cad ? `Dibujo ${cad.format.toUpperCase()} (vista local del archivo)` : 'Plano original'}</figcaption><div className="wf-compare-frame"><img src={page.image_url} alt={cad ? 'Dibujo DWG original' : `Plano original, página ${page.page}`} /></div></figure>
-          <figure><figcaption>Interpretación de la IA <label className="wf-toggle"><input type="checkbox" checked={showAI} onChange={e=>setShowAI(e.target.checked)}/> Superponer</label></figcaption><div className="wf-compare-frame"><PlanOverlay page={page} entities={showAI ? draft.entities : []} faint={showAI} pending={cad?.pending} /></div></figure>
+          <figure><figcaption>{cad ? `Dibujo ${cad.format.toUpperCase()} (vista local del archivo)` : 'Plano original'}</figcaption><ZoomPane key={`orig-${page.image_url}-${linkViews}`} aspect={page.width / page.height} label="plano original" {...(linkViews ? { view: sharedView, onView: setSharedView } : {})}><img src={page.image_url} alt={cad ? 'Dibujo DWG original' : `Plano original, página ${page.page}`} draggable={false} /></ZoomPane></figure>
+          <figure><figcaption>Interpretación de la IA <label className="wf-toggle"><input type="checkbox" checked={showAI} onChange={e=>setShowAI(e.target.checked)}/> Superponer</label></figcaption><ZoomPane key={`ai-${page.image_url}-${linkViews}`} aspect={page.width / page.height} label="interpretación de la IA" {...(linkViews ? { view: sharedView, onView: setSharedView } : {})}><PlanOverlay page={page} entities={showAI ? draft.entities : []} faint={showAI} pending={cad?.pending} /></ZoomPane></figure>
         </div>
         <p className="wf-muted wf-legend-note">Las flechas de los muebles indican su frente (orientación).</p><ul className="wf-legend" aria-label="Elementos interpretados">{(['wall','door','window','room','furniture'] as Kind[]).map(k=><li key={k}><span style={{background:kindColors[k]}}/>{counts[k] ?? 0} {plural[k]}</li>)}</ul>
         {cad ? <CadPanel key={`${project.id}-${project.revision}`} cad={cad} busy={busy} onAnswer={sendAnswers} /> : null}

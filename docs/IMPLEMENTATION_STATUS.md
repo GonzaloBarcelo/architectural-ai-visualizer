@@ -1,3 +1,13 @@
+# Review readability and DWG robustness — 2026-11-10 (Claude Code, branch `feature/docker`)
+
+- **DWG with two drawn plans** (Torrelavit test, `dwg` with 2 plans 1.56 m apart): approval failed with «La interpretación no es coherente» because one wall hatch spanning both plans added the other plan's walls outside the review sheet (19 off-sheet walls). Wall, line-pair and floor-hatch geometry is now clipped to the chosen plan.
+- **Angled walls**: separately snapped convex pieces overlapped by sub-millimetre slivers (≤ 5·10⁻⁵ m², schema limit 10⁻⁵ m²) and rounding could repeat a corner; pieces are now exclusive and outlines drop repeated corners. Openings that fill a rotated host wall are cut with a cutter that overshoots the host's ends, floor and top, so Blender's exact boolean no longer leaves degenerate faces or an uncut door. Result on the Torrelavit drawing: approval validation 0 issues, Blender QA **285/285**, 5 renders. The first DWG test still reads identically (52 walls, 7 doors, 4 windows, 6 rooms, 33 furniture).
+- **Review layout**: the page uses the full window width (no 1440 px cap). The original and AI panes fill the window height and pan/zoom (wheel or pinch at the pointer, drag, double click, +/−, «Ajustar», full screen), linked by default («Sincronizar vistas»). Checked in headless Chrome at 1920×1080: both panes 905×900 px, fit 80 %, wheel zoom to 338 % and a 200×80 px drag identical in both panes, «Ajustar» restores the fit.
+- **Sharper review images**: PDF pages are rasterised for display at up to 4× (capped at 8000 px; EA_01_MOD_1: 4764×3368 px, 445 KB, 0.3 s) instead of 1.5×; line detection keeps its own 1.5× raster. DWG review sheets are 6000 px (was 2400). The AI's labelled images are unchanged.
+- Existing projects keep their old reading and images: re-interpret or upload again to get the fixes.
+
+---
+
 # Docker image — 2026-11-10 (Claude Code, branch `feature/docker`)
 
 The whole app runs from one image, `gonzalez-cardona/visualizer`: the FastAPI server, Blender 4.5.9 LTS (headless, Cycles on CPU), LibreDWG `dwg2dxf` 0.14 compiled from source, Node 24 with the site build and the GLB scripts, fonts for DWG plan sheets, and the locked Python environment (`uv sync --locked --no-dev`). It runs as a non-root user, stores projects in the `/data` volume and publishes on the host's `127.0.0.1:5174`, the same address as the native server. `OPENAI_API_KEY` and every model come from `.env` at run time and never enter the image (`.dockerignore` also excludes outputs, client drawings and local environments).

@@ -32,10 +32,18 @@
 .wf-review-cta small{font-size:10px;color:var(--muted)}
 .wf-compare{display:grid;grid-template-columns:minmax(0,1fr) minmax(0,1fr);gap:14px;margin:0}
 .wf-compare figure{margin:0;min-width:0}
-.wf-compare figcaption{display:flex;justify-content:space-between;align-items:center;font-size:11px;letter-spacing:1px;text-transform:uppercase;padding:0 0 8px}
+.wf-compare figcaption{display:flex;justify-content:space-between;align-items:center;font-size:11px;letter-spacing:1px;text-transform:uppercase;padding:0 0 8px;min-height:30px}
 .wf-toggle{display:flex;align-items:center;gap:6px;text-transform:none;letter-spacing:0;font-size:11px}
-.wf-compare-frame{border:1px solid var(--line);background:#fff;aspect-ratio:1.414;overflow:auto}
-.wf-compare-frame img,.wf-compare-frame svg{display:block;width:100%;height:auto}
+.wf-compare-bar{display:flex;align-items:center;gap:18px;flex-wrap:wrap;margin:0 0 10px;font-size:11px}
+.wf-zoom{position:relative;overflow:hidden;height:calc(100vh - 180px);min-height:420px;border:1px solid var(--line);background:#fff;touch-action:none;cursor:grab;user-select:none;overscroll-behavior:contain}
+.wf-zoom.dragging{cursor:grabbing}
+.wf-zoom-content{position:absolute;left:0;top:0;transform-origin:0 0}
+.wf-zoom-content img,.wf-zoom-content svg{display:block;width:100%;height:100%;-webkit-user-drag:none}
+.wf-zoom-tools{position:absolute;right:10px;bottom:10px;display:flex;align-items:center;gap:4px;padding:4px;background:#f8f8f0eb;border:1px solid var(--line);border-radius:2px;cursor:default}
+.wf-zoom-tools button{padding:6px 10px;font-size:12px;line-height:1;min-width:32px}
+.wf-zoom-tools span{font-size:10px;color:var(--muted);min-width:42px;text-align:right;padding-right:4px;font-variant-numeric:tabular-nums}
+.wf-compare figure:fullscreen{background:#fff;padding:16px;display:flex;flex-direction:column}
+.wf-compare figure:fullscreen .wf-zoom{flex:1;height:auto}
 .wf-ai-shape{fill-opacity:.55;stroke-width:.6;vector-effect:non-scaling-stroke}
 .wf-ai-slab{fill-opacity:.18}.wf-ai-room{fill-opacity:.12;stroke-dasharray:3 2}.wf-ai-wall{fill-opacity:.9}.wf-ai-door,.wf-ai-window{fill-opacity:.95}
 .wf-legend{display:flex;flex-wrap:wrap;gap:8px 22px;list-style:none;padding:14px 0;margin:0;border-bottom:1px solid var(--line);font-size:12px}

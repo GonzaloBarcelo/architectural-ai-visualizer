@@ -10,6 +10,8 @@ import pymupdf as fitz
 
 from pipelines.common import sha256, write_json
 
+DISPLAY_MAX_PX = 8000
+
 
 def coords(value):
     if isinstance(value, (fitz.Point, fitz.Rect, fitz.Quad)):
@@ -57,8 +59,13 @@ def extract(path: Path, output: Path):
             )
         if page.rect.width * page.rect.height > 20_000_000:
             raise ValueError("Page size exceeds raster safety limit; resize before processing.")
+        # Review image: sharp enough to zoom into a large sheet (≈ 4×, capped at 8000 px).
+        # Line detection below keeps its own 1.5× raster, whose thresholds are tuned in pixels.
+        sharp = min(4.0, DISPLAY_MAX_PX / max(page.rect.width, page.rect.height))
+        page.get_pixmap(matrix=fitz.Matrix(sharp, sharp), alpha=False, annots=False).save(
+            output / f"page-{pi + 1}.png"
+        )
         pix = page.get_pixmap(matrix=fitz.Matrix(1.5, 1.5), alpha=False, annots=False)
-        pix.save(output / f"page-{pi + 1}.png")
         img = np.frombuffer(pix.samples, dtype=np.uint8).reshape(pix.height, pix.width, 3)
         gray = cv2.cvtColor(img, cv2.COLOR_RGB2GRAY)
         edges = cv2.Canny(gray, 60, 160)
